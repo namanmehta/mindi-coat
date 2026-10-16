@@ -82,6 +82,9 @@ describe('multiplayer table', { timeout: 30000 }, () => {
       expect(v.myHand.length).toBe(5);
       expect(cs[i].last!.you).toBe(i);
     }
+    // everyone at the table sees who is watching
+    expect(cs[0].last!.watchers).toEqual(['Eve']);
+    expect(cs[3].last!.watchers).toEqual(['Eve']);
     // spectator sees no cards, and nobody's payload contains another hand
     expect(extra.last!.view!.myHand).toEqual([]);
     const others = cs[1].last!.view!.myHand.map((c) => `${c.r}${c.s}`);
@@ -125,7 +128,10 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     expect(s.results.length).toBe(2);
     expect(s.results[1].blind).toBe(true);
 
-    for (const c of [...cs, extra]) c.s.close();
+    extra.s.close();
+    await settle();
+    expect(cs[0].last!.watchers).toEqual([]); // gone when they leave
+    for (const c of cs) c.s.close();
   });
 
   it('two players racing for the same turn: exactly one wins', async () => {

@@ -86,6 +86,9 @@ button:disabled { cursor: not-allowed; }
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; z-index: 6; }
 .bar-left { display: flex; align-items: center; gap: calc(var(--u) * 1.5); }
 .bar-left .link { font-size: calc(var(--u) * 2.8); }
+.bar-left { flex-wrap: wrap; }
+.watchers { font-size: calc(var(--u) * 2.6); color: var(--mist); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: calc(var(--u) * 52); background: rgba(18, 26, 51, 0.7); border-radius: 999px; padding: calc(var(--u) * 0.3) calc(var(--u) * 1.8); }
 .chip { background: var(--indigo-deep); border: 1px solid var(--indigo-line); border-radius: 999px;
   padding: calc(var(--u) * 0.8) calc(var(--u) * 2.6); font-weight: 700; font-size: calc(var(--u) * 3.4);
   display: inline-flex; gap: calc(var(--u) * 1.2); align-items: center; white-space: nowrap; }

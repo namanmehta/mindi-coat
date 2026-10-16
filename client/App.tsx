@@ -260,6 +260,13 @@ function Table({ state, send, name, onLeave }: {
             <span className="copied" aria-live="polite">{copied ? 'Link copied' : ''}</span>
           </button>
           {!state.started && onLeave && <button className="link" onClick={onLeave}>Leave</button>}
+          {state.watchers.length > 0 && (
+            <span className="watchers" title={state.watchers.join(', ')}>
+              <span aria-hidden="true">👀</span> Watching: {state.watchers.length > 3
+                ? `${state.watchers.slice(0, 3).join(', ')} and ${state.watchers.length - 3} more`
+                : state.watchers.join(', ')}
+            </span>
+          )}
         </div>
         <button className="chip match" onClick={() => setShowResults(true)} title="Results">
           <span className="a">{teamName(0)}</span><span className="n">{state.handsWon[0]}</span>

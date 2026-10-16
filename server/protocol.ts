@@ -13,6 +13,8 @@ export interface SeatInfo {
 export interface RoomState {
   code: string;
   teamNames: [string, string];
+  /** people connected without a seat */
+  watchers: string[];
   seats: (SeatInfo | null)[];
   started: boolean;
   paused: boolean;

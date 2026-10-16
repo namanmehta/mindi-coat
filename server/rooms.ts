@@ -21,6 +21,8 @@ export interface Room {
   timers: Map<number, ReturnType<typeof setTimeout>>;
   emptySince: number | null;
   teamNames: [string, string];
+  /** socketId -> display name, for showing who is watching */
+  memberNames: Map<string, string>;
   /** matches needed to win a series: 4 = best of 7, null = no limit */
   seriesTarget: number | null;
 }
@@ -49,6 +51,7 @@ export class RoomManager {
       code: this.newCode(), seats: [null, null, null, null], sitting: null,
       members: new Map(), timers: new Map(), emptySince: this.now(),
       teamNames: ['Team A', 'Team B'],
+      memberNames: new Map(),
       seriesTarget: 4,
     };
     this.rooms.set(room.code, room);
@@ -69,6 +72,7 @@ export class RoomManager {
   /** Enter a room. A returning token reclaims its seat. */
   join(room: Room, socketId: string, token: string, name: string): void {
     room.members.set(socketId, token);
+    room.memberNames.set(socketId, cleanup(name) || 'Someone');
     room.emptySince = null;
     const seat = this.seatOf(room, token);
     if (seat !== null) {
@@ -120,6 +124,7 @@ export class RoomManager {
     for (const room of this.rooms.values()) {
       if (!room.members.has(socketId)) continue;
       room.members.delete(socketId);
+      room.memberNames.delete(socketId);
       const i = room.seats.findIndex((s) => s && s.socketId === socketId);
       if (i >= 0) {
         const rec = room.seats[i]!;
@@ -219,6 +224,7 @@ export class RoomManager {
     return {
       code: room.code,
       teamNames: room.teamNames,
+      watchers: this.watchers(room),
       seats: room.seats.map((r) => r && {
         name: r.name, connected: !!r.socketId, holdUntil: r.holdUntil, open: r.open,
       }),
@@ -234,6 +240,18 @@ export class RoomManager {
       you,
       view: s && s.hand ? viewFor(s.hand, you) : null,
     };
+  }
+
+  /** Names of everyone connected to the room without a seat (one entry per person). */
+  watchers(room: Room): string[] {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const [socketId, token] of room.members) {
+      if (this.seatOf(room, token) !== null || seen.has(token)) continue;
+      seen.add(token);
+      names.push(room.memberNames.get(socketId) || 'Someone');
+    }
+    return names;
   }
 
   /** Drop rooms nobody has been in for a while. */
