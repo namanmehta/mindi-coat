@@ -2,6 +2,12 @@
 
 This is the specification the game engine implements. If the code and this file disagree, this file wins and the code is a bug.
 
+## Words
+
+* **Hand:** one round where each player plays one card (4 cards). The highest card takes the hand.
+* **Match:** one full deal of 13 hands, won with 3 tens, or 2 tens and 7 hands.
+* **Series:** best of 7 matches (first team to 4). Optional: no limit, just keep counting matches.
+
 ## Table
 
 * 4 players, 2 teams. Partners sit opposite each other.
@@ -14,7 +20,7 @@ This is the specification the game engine implements. If the code and this file 
 * A toss picks the first trump chooser at random.
 * Dealing is automatic. The dealer seat is shown for flavor only and has no effect on play.
 
-## Each hand
+## Each match
 
 1. **First deal.** Every player gets 5 cards.
 2. **Trump choice.** The chooser looks at their own 5 cards and does one of:
@@ -22,28 +28,31 @@ This is the specification the game engine implements. If the code and this file 
    * **Go blind.** The chooser's own next 8 cards are shown face down. The chooser taps one. That card is revealed to all players, its suit becomes trump, and it stays in the chooser's hand.
 3. **Trump is announced** to all players immediately in both cases.
 4. **Second deal.** Every player gets 8 more cards (13 total). In a blind hand, the chooser's 8 are the same 8 they picked from.
-5. **Play.** The chooser leads the first trick.
+5. **Play.** The chooser leads the first hand.
    * Players must follow the led suit if they can.
    * A player with no card of the led suit may play any card. Playing trump is optional.
-   * The trick goes to the highest trump played. If no trump was played, it goes to the highest card of the led suit.
-   * The trick winner leads the next trick.
-6. **Hand result.** A team wins the hand the moment it holds either:
+   * The hand goes to the highest trump played. If no trump was played, it goes to the highest card of the led suit.
+   * The winner of a hand leads the next hand.
+6. **Match result.** A team wins the match the moment it holds either:
    * 3 or 4 tens, or
-   * 2 tens and 7 or more tricks.
+   * 2 tens and 7 or more hands.
 
-   The hand stops immediately when either condition is met. A tie is impossible: a 2 to 2 split of tens always leaves one team with 7+ tricks by trick 13.
+   The match stops immediately when either condition is met. A tie is impossible: a 2 to 2 split of tens always leaves one team with 7+ hands by hand 13.
 7. **Capturing all four tens** is a normal win (logged in the results table, no bonus).
 
-## Next hand
+## Next match
 
-* The chooser passes to the right (A1, then B1, then A2, then B2, then A1...), regardless of who won.
+* The winning team always chooses trump next.
+  * If the chooser's team **won**, the chooser's **partner** chooses next (A1 chose and won, so A2 chooses).
+  * If the chooser's team **lost**, the player on the chooser's **right** chooses next (A1 chose and lost, so B1 chooses).
 
 ## Scoring and display
 
-* **Live, during a hand:** tens captured and tricks won per team, current trump, whose turn.
-* **Across the sitting:** hands won per team.
-* **Results table:** one row per hand: hand number, chooser, trump suit, blind or named, winning team, tens per team, tricks per team, whether it ended early.
-* A sitting has no fixed end. It runs until players leave.
+* **Live, during a match:** hands won per team, and which of the four tens (by suit) each team has taken. Current trump, whose turn.
+* **After each hand:** the winning card is highlighted with "Name wins the hand", then the four cards slide toward the winner and the table clears.
+* **Series:** matches won per team, first to 4. When a team reaches 4 it wins the series; a new series starts the count at 0. Series won are tallied. With "no limit", matches are just counted.
+* **Team names:** each team names itself (up to 20 characters, must differ from the other team).
+* **Results table:** one row per match: series, match number, chooser, trump suit, blind or named, winning team, tens per team, hands per team, whether it ended early.
 
 ## Players and disconnects
 

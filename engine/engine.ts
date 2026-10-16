@@ -9,6 +9,7 @@ export type Team = 0 | 1; // 0 = Team A (seats 0,2), 1 = Team B (seats 1,3)
 
 export const teamOf = (seat: number): Team => (seat % 2) as Team;
 export const rightOf = (seat: number): Seat => ((seat + 1) % 4) as Seat;
+export const partnerOf = (seat: number): Seat => ((seat + 2) % 4) as Seat;
 export const cardId = (c: Card) => `${c.r}${c.s}`;
 export const sameCard = (a: Card, b: Card) => a.s === b.s && a.r === b.r;
 
@@ -38,6 +39,8 @@ export interface HandState {
   lastTrick: { plays: Play[]; winner: Seat } | null;
   tricks: [number, number];
   tens: [number, number];
+  /** which ten went to which team, in capture order */
+  tensTaken: { suit: Suit; team: Team }[];
   tricksPlayed: number;
   result: HandResult | null;
 }
@@ -51,13 +54,21 @@ export interface ResultRow {
   tens: [number, number];
   tricks: [number, number];
   early: boolean;
+  series: number;
 }
 
 export interface Sitting {
   nextChooser: Seat;
+  /** matches won in the current series */
   handsWon: [number, number];
   results: ResultRow[];
   hand: HandState | null;
+  /** matches needed to win a series (4 = best of 7); null = no limit, just keep counting */
+  target: number | null;
+  seriesNo: number;
+  seriesWon: [number, number];
+  /** set when a team reaches the target; cleared by newSeries */
+  seriesWinner: Team | null;
 }
 
 export type Rng = () => number;
@@ -78,14 +89,25 @@ export function shuffle<T>(arr: T[], rng: Rng): T[] {
 }
 
 /** Start a sitting. The toss picks the first chooser at random. */
-export function newSitting(rng: Rng, firstChooser?: Seat): Sitting {
+export function newSitting(rng: Rng, firstChooser?: Seat, target: number | null = null): Sitting {
   const chooser = firstChooser ?? (Math.floor(rng() * 4) as Seat);
-  return { nextChooser: chooser, handsWon: [0, 0], results: [], hand: null };
+  if (target !== null && (!Number.isInteger(target) || target < 1)) throw new RuleError('Invalid series length');
+  return {
+    nextChooser: chooser, handsWon: [0, 0], results: [], hand: null,
+    target, seriesNo: 1, seriesWon: [0, 0], seriesWinner: null,
+  };
+}
+
+/** After a series is won, reset the match count and start the next series. */
+export function newSeries(sitting: Sitting): Sitting {
+  if (sitting.seriesWinner === null) throw new RuleError('The series is not over yet');
+  return { ...sitting, handsWon: [0, 0], seriesNo: sitting.seriesNo + 1, seriesWinner: null, hand: null };
 }
 
 /** Deal a new hand: 5 cards each now, 8 each held back for the second deal. */
 export function startHand(sitting: Sitting, rng: Rng, deck?: Card[]): Sitting {
   if (sitting.hand && sitting.hand.phase !== 'done') throw new RuleError('A hand is already in progress');
+  if (sitting.seriesWinner !== null) throw new RuleError('The series is over. Start a new series.');
   const d = deck ?? shuffle(newDeck(), rng);
   if (d.length !== 52) throw new RuleError('Deck must have 52 cards');
   const chooser = sitting.nextChooser;
@@ -97,7 +119,7 @@ export function startHand(sitting: Sitting, rng: Rng, deck?: Card[]): Sitting {
   for (let round = 0; round < 5; round++) for (const s of order) hands[s].push(d[k++]);
   for (let round = 0; round < 8; round++) for (const s of order) pending[s].push(d[k++]);
   const hand: HandState = {
-    handNo: sitting.results.length + 1,
+    handNo: sitting.handsWon[0] + sitting.handsWon[1] + 1, // match number within the series
     chooser,
     dealer: ((chooser + 3) % 4) as Seat,
     phase: 'choosing',
@@ -111,6 +133,7 @@ export function startHand(sitting: Sitting, rng: Rng, deck?: Card[]): Sitting {
     lastTrick: null,
     tricks: [0, 0],
     tens: [0, 0],
+    tensTaken: [],
     tricksPlayed: 0,
     result: null,
   };
@@ -207,12 +230,14 @@ export function playCard(sitting: Sitting, seat: Seat, card: Card): Sitting {
   const tricks: [number, number] = [...h.tricks];
   const tens: [number, number] = [...h.tens];
   tricks[team]++;
-  tens[team] += trick.filter((p) => p.card.r === 10).length;
+  const newTens = trick.filter((p) => p.card.r === 10).map((p) => ({ suit: p.card.s, team }));
+  tens[team] += newTens.length;
+  const tensTaken = [...h.tensTaken, ...newTens];
   const tricksPlayed = h.tricksPlayed + 1;
   const won = lockedWinner(tens, tricks);
 
   let next: HandState = {
-    ...h, hands, trick: [], lastTrick: { plays: trick, winner }, tricks, tens, tricksPlayed, turn: winner,
+    ...h, hands, trick: [], lastTrick: { plays: trick, winner }, tricks, tens, tensTaken, tricksPlayed, turn: winner,
   };
   if (won === null) {
     if (tricksPlayed === 13) throw new Error('Invariant: 13 tricks played without a result');
@@ -225,10 +250,17 @@ export function playCard(sitting: Sitting, seat: Seat, card: Card): Sitting {
   handsWon[won]++;
   const row: ResultRow = {
     handNo: h.handNo, chooser: h.chooser, trump: h.trump!, blind: h.blind,
-    winner: won, tens, tricks, early,
+    winner: won, tens, tricks, early, series: sitting.seriesNo,
   };
+  const seriesOver = sitting.target !== null && handsWon[won] >= sitting.target;
+  const seriesWon: [number, number] = [...sitting.seriesWon];
+  if (seriesOver) seriesWon[won]++;
   return {
-    nextChooser: rightOf(h.chooser),
+    ...sitting,
+    seriesWon,
+    seriesWinner: seriesOver ? won : null,
+    // Winning team chooses next: chooser's team won -> partner; lost -> player on chooser's right.
+    nextChooser: won === teamOf(h.chooser) ? partnerOf(h.chooser) : rightOf(h.chooser),
     handsWon,
     results: [...sitting.results, row],
     hand: next,
@@ -254,6 +286,7 @@ export interface PlayerView {
   lastTrick: { plays: Play[]; winner: Seat } | null;
   tricks: [number, number];
   tens: [number, number];
+  tensTaken: { suit: Suit; team: Team }[];
   result: HandResult | null;
   legal: Card[];
 }
@@ -276,6 +309,7 @@ export function viewFor(h: HandState, seat: Seat | null): PlayerView {
     lastTrick: h.lastTrick,
     tricks: h.tricks,
     tens: h.tens,
+    tensTaken: h.tensTaken,
     result: h.result,
     legal: seat === null ? [] : legalMoves(h, seat),
   };

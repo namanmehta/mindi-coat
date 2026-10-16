@@ -1,6 +1,6 @@
 // Room and seat management. Owns the authoritative game state for each table.
 import {
-  Seat, Sitting, Suit, Card, RuleError, newSitting, startHand, nameTrump, goBlind, pickBlind, playCard, viewFor,
+  Seat, Sitting, Suit, Card, RuleError, newSitting, newSeries, startHand, nameTrump, goBlind, pickBlind, playCard, viewFor,
 } from '../engine/engine';
 import { RoomState, RECONNECT_MS } from './protocol';
 
@@ -20,6 +20,9 @@ export interface Room {
   members: Map<string, string>;
   timers: Map<number, ReturnType<typeof setTimeout>>;
   emptySince: number | null;
+  teamNames: [string, string];
+  /** matches needed to win a series: 4 = best of 7, null = no limit */
+  seriesTarget: number | null;
 }
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1
@@ -45,6 +48,8 @@ export class RoomManager {
     const room: Room = {
       code: this.newCode(), seats: [null, null, null, null], sitting: null,
       members: new Map(), timers: new Map(), emptySince: this.now(),
+      teamNames: ['Team A', 'Team B'],
+      seriesTarget: 4,
     };
     this.rooms.set(room.code, room);
     return room;
@@ -162,17 +167,39 @@ export class RoomManager {
     this.onChange(room);
   }
 
+  /** A seated player renames their own team. */
+  setTeamName(room: Room, socketId: string, name: string): void {
+    const seat = this.requireSeat(room, socketId);
+    const clean = cleanup(name);
+    if (!clean) throw new RuleError('Enter a team name');
+    const other = room.teamNames[1 - (seat % 2)];
+    if (clean.toLowerCase() === other.toLowerCase()) throw new RuleError('The other team already has that name');
+    room.teamNames[seat % 2] = clean;
+    this.onChange(room);
+  }
+
+  /** Lobby only: best of 7 (target 4) or no limit (null). */
+  setSeries(room: Room, socketId: string, target: number | null): void {
+    this.requireSeat(room, socketId);
+    if (room.sitting) throw new RuleError('The series length is set before the game starts');
+    if (target !== null && target !== 4) throw new RuleError('Choose best of 7 or no limit');
+    room.seriesTarget = target;
+    this.onChange(room);
+  }
+
+  newSeries(room: Room, socketId: string) { this.act(room, socketId, (s) => newSeries(s)); }
+
   start(room: Room, socketId: string): void {
     this.requireSeat(room, socketId);
     if (room.sitting) throw new RuleError('Already started');
     if (room.seats.some((s) => !s || !s.socketId)) throw new RuleError('Need four connected players');
-    room.sitting = startHand(newSitting(this.rng), this.rng); // toss happens here
+    room.sitting = startHand(newSitting(this.rng, undefined, room.seriesTarget), this.rng); // toss happens here
     this.onChange(room);
   }
 
   nextHand(room: Room, socketId: string) {
     this.act(room, socketId, (s) => {
-      if (!s.hand || s.hand.phase !== 'done') throw new RuleError('The current hand is not finished');
+      if (s.hand && s.hand.phase !== 'done') throw new RuleError('The current match is not finished');
       return startHand(s, this.rng);
     });
   }
@@ -191,6 +218,7 @@ export class RoomManager {
     const s = room.sitting;
     return {
       code: room.code,
+      teamNames: room.teamNames,
       seats: room.seats.map((r) => r && {
         name: r.name, connected: !!r.socketId, holdUntil: r.holdUntil, open: r.open,
       }),
@@ -198,6 +226,10 @@ export class RoomManager {
       paused: this.paused(room),
       nextChooser: s ? s.nextChooser : 0,
       handsWon: s ? s.handsWon : [0, 0],
+      seriesTarget: s ? s.target : room.seriesTarget,
+      seriesNo: s ? s.seriesNo : 1,
+      seriesWon: s ? s.seriesWon : [0, 0],
+      seriesWinner: s ? s.seriesWinner : null,
       results: s ? s.results : [],
       you,
       view: s && s.hand ? viewFor(s.hand, you) : null,

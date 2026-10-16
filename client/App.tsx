@@ -11,7 +11,7 @@ const SUIT_ORDER: Suit[] = ['S', 'H', 'C', 'D']; // alternates colour in the han
 const isRed = (s: Suit) => s === 'H' || s === 'D';
 const rankLabel = (r: number) => ({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A' } as Record<number, string>)[r] ?? String(r);
 const same = (a: Card, b: Card) => a.r === b.r && a.s === b.s;
-const teamName = (t: number) => (t === 0 ? 'Team A' : 'Team B');
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function store(key: string, value?: string): string | null {
   try {
@@ -47,11 +47,12 @@ function useSocket() {
 
 // ---------- cards ----------
 
-function CardFace({ card, onClick, disabled, highlight, small }: {
-  card: Card; onClick?: () => void; disabled?: boolean; highlight?: boolean; small?: boolean;
+function CardFace({ card, onClick, disabled, highlight, trump, className, style }: {
+  card: Card; onClick?: () => void; disabled?: boolean; highlight?: boolean; trump?: boolean;
+  className?: string; style?: React.CSSProperties;
 }) {
   const cls = ['card', isRed(card.s) ? 'red' : 'black', card.r === 10 ? 'ten' : '', highlight ? 'win' : '',
-    small ? 'small' : '', onClick ? 'playable' : '', disabled ? 'disabled' : ''].join(' ');
+    trump ? 'trumpc' : '', onClick ? 'playable' : '', disabled ? 'disabled' : '', className ?? ''].join(' ');
   const label = `${rankLabel(card.r)} of ${SUIT_NAME[card.s]}`;
   const inner = (
     <>
@@ -60,9 +61,9 @@ function CardFace({ card, onClick, disabled, highlight, small }: {
     </>
   );
   if (onClick) {
-    return <button className={cls} onClick={onClick} disabled={disabled} aria-label={label}>{inner}</button>;
+    return <button className={cls} style={style} onClick={onClick} disabled={disabled} aria-label={label}>{inner}</button>;
   }
-  return <div className={cls} aria-label={label}>{inner}</div>;
+  return <div className={cls} style={style} aria-label={label}>{inner}</div>;
 }
 
 // ---------- entry screen ----------
@@ -78,7 +79,7 @@ function Entry({ onCreate, onJoin, error }: {
     <main className="entry">
       <h1 className="wordmark">Mindi<span>Coat</span></h1>
       <p className="tagline">Four friends, two teams, the four tens. Real players only.</p>
-      <div className="panel">
+      <div className="entry-panel">
         <label className="field">
           <span>Your name</span>
           <input value={name} maxLength={20} autoComplete="nickname" onChange={(e) => setName(e.target.value)}
@@ -101,6 +102,18 @@ function Entry({ onCreate, onJoin, error }: {
 
 // ---------- the table ----------
 
+type Pos = 'bottom' | 'right' | 'top' | 'left';
+
+// Where each played card sits on the felt, and where it flies when its hand is won (in --u units).
+const CARD_CENTER: Record<Pos, [number, number]> = { bottom: [0, 7.8], top: [0, -7.7], left: [-16.8, 0], right: [16.8, 0] };
+const SEAT_CENTER: Record<Pos, [number, number]> = { bottom: [0, 26], top: [0, -26], left: [-59, 0], right: [59, 0] };
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0] ?? '?').slice(0, 2).toUpperCase();
+}
+
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -111,170 +124,242 @@ function useNow(active: boolean) {
   return now;
 }
 
+/** When a hand completes: hold the four cards with the winner lit, then sweep them to the winner. */
+function useSweep(view: RoomState['view']) {
+  const [sweep, setSweep] = useState<{ key: string; plays: Play[]; winner: Seat; flying: boolean } | null>(null);
+  const prev = useRef<{ handNo: number; done: number } | null>(null);
+  const done = view ? view.tricks[0] + view.tricks[1] : 0;
+  useEffect(() => {
+    if (!view) { prev.current = null; return; }
+    const p = prev.current;
+    prev.current = { handNo: view.handNo, done };
+    if (p && p.handNo === view.handNo && done === p.done + 1 && view.lastTrick) {
+      const key = `${view.handNo}-${done}`;
+      setSweep({ key, plays: view.lastTrick.plays, winner: view.lastTrick.winner, flying: false });
+      setTimeout(() => setSweep((s) => (s && s.key === key ? { ...s, flying: true } : s)), 1100);
+      setTimeout(() => setSweep((s) => (s && s.key === key ? null : s)), 1700);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view?.handNo, done]);
+  // The winner already led the next hand: clear the table at once.
+  return sweep && view && view.trick.length === 0 ? sweep : null;
+}
+
+function TeamPanel({ team, name, hands, tens, mine, side, onRename }: {
+  team: 0 | 1; name: string; hands: number; tens: Suit[]; mine: boolean; side: 'left' | 'right';
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const save = () => { const n = draft.trim(); if (n && n !== name) onRename(n); setEditing(false); };
+  return (
+    <section className={`team-panel ${side} t${team}`} aria-label={`${name} score`}>
+      <div className="tp-head">
+        {editing ? (
+          <form className="rename" onSubmit={(e) => { e.preventDefault(); save(); }}>
+            <input value={draft} maxLength={20} autoFocus aria-label="Team name"
+              onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }} />
+            <button className="btn tiny primary" type="submit">Save</button>
+          </form>
+        ) : (
+          <>
+            <span className="tname">{name}</span>
+            {mine && <button className="edit" onClick={() => { setDraft(name); setEditing(true); }} aria-label="Rename your team" title="Rename your team">✎</button>}
+            <span className="hands"><b>{hands}</b> {hands === 1 ? 'hand' : 'hands'}</span>
+          </>
+        )}
+      </div>
+      <div className="tens">
+        {(['S', 'H', 'C', 'D'] as Suit[]).map((suit) => {
+          const won = tens.includes(suit);
+          return (
+            <div key={suit} className={`mini ${won ? 'won' : ''} ${won && isRed(suit) ? 'red' : ''}`}
+              aria-label={`10 of ${SUIT_NAME[suit]}${won ? ' won' : ' not won'}`}>
+              <span>10<br /><span className="ss">{SUIT_SYMBOL[suit]}</span></span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function Table({ state, send, name, onLeave }: {
   state: RoomState; send: (ev: string, payload?: any) => void; name: string; onLeave?: () => void;
 }) {
-  const { seats, view, you } = state;
+  const { seats, view, you, teamNames } = state;
   const me: Seat = (you ?? 0) as Seat;
   // You sit at the bottom. Play goes counterclockwise, so the next player is on your right.
-  const posOf = (seat: number) => (['bottom', 'right', 'top', 'left'] as const)[(seat - me + 4) % 4];
-  const myTeam = you === null ? null : you % 2;
+  const posOf = (seat: number): Pos => (['bottom', 'right', 'top', 'left'] as const)[(seat - me + 4) % 4];
+  const myTeam = (you === null ? 0 : you % 2) as 0 | 1;
+  const otherTeam = (1 - myTeam) as 0 | 1;
+  const teamName = (t: number) => teamNames[t];
   const now = useNow(state.paused);
+  const sweep = useSweep(view);
   const [showResults, setShowResults] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [portraitOk, setPortraitOk] = useState(false);
 
-  const shareUrl = `${location.origin}/?room=${state.code}`;
   const copy = async () => {
-    try { await navigator.clipboard.writeText(shareUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }
-    catch { /* clipboard blocked; the link is visible anyway */ }
+    try {
+      await navigator.clipboard.writeText(`${location.origin}/?room=${state.code}`);
+      setCopied(true); setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked */ }
   };
 
-  const seatLabel = (seat: number) => seats[seat]?.name ?? 'Open seat';
-  const teamTag = (seat: number) => (myTeam === null ? teamName(seat % 2) : seat % 2 === myTeam ? 'Your team' : 'Opponents');
-
-  // Trick on the table: current trick, or the last finished trick until a new card lands.
-  const shownTrick: Play[] = view ? (view.trick.length ? view.trick : view.lastTrick?.plays ?? []) : [];
-  const trickWinner = view && !view.trick.length ? view.lastTrick?.winner : undefined;
-
+  const seatName = (seat: number) => seats[seat]?.name ?? 'Open seat';
   const hand = useMemo(() => {
     if (!view) return [];
-    return view.myHand.slice().sort((a, b) =>
-      SUIT_ORDER.indexOf(a.s) - SUIT_ORDER.indexOf(b.s) || a.r - b.r);
+    // trump suit last, so trump cards sit together on the right
+    const order = SUIT_ORDER.filter((s) => s !== view.trump).concat(view.trump ? [view.trump] : []);
+    return view.myHand.slice().sort((a, b) => order.indexOf(a.s) - order.indexOf(b.s) || a.r - b.r);
   }, [view]);
 
   const myTurn = !!view && view.phase === 'playing' && view.turn === you && !state.paused;
   const isLegal = (c: Card) => !!view?.legal.some((x) => same(x, c));
-  const choosing = view && (view.phase === 'choosing' || view.phase === 'blind');
   const iChoose = !!view && view.chooser === you;
+  const seated = seats.filter(Boolean).length;
+  const target = state.seriesTarget;
 
-  // Pause banner text
   let pauseText = '';
   if (state.started && state.paused) {
-    const gone = seats.map((s, i) => ({ s, i })).filter(({ s }) => !s || !s.connected);
-    pauseText = gone.map(({ s, i }) => {
-      if (!s) return 'A seat is empty';
+    pauseText = seats.map((s, i) => {
+      if (s && s.connected) return '';
+      if (!s) return 'A seat is empty.';
       if (s.open) return `${s.name} left. Share the code so someone can take the ${posOf(i)} seat.`;
       const secs = Math.max(0, Math.ceil(((s.holdUntil ?? now) - now) / 1000));
       return `Waiting for ${s.name} to reconnect (${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')})`;
-    }).join(' ');
+    }).filter(Boolean).join(' ');
   }
 
   const canTakeSeat = (seat: number) => {
     const s = seats[seat];
-    if (you !== null) return !state.started && !s; // switch seats in the lobby
+    if (you !== null) return !state.started && !s;
     return state.started ? !!s?.open : !s;
   };
 
+  const tensOf = (t: number) => (view?.tensTaken ?? []).filter((x) => x.team === t).map((x) => x.suit);
+
+  // What sits on the felt: the live hand, or the finished hand being swept to its winner.
+  const onFelt: { plays: Play[]; winner?: Seat; flying: boolean } =
+    view && view.trick.length ? { plays: view.trick, flying: false }
+      : sweep ? { plays: sweep.plays, winner: sweep.winner, flying: sweep.flying }
+        : { plays: [], flying: false };
+
+  const flyStyle = (from: Pos, to: Pos): React.CSSProperties => {
+    const [cx, cy] = CARD_CENTER[from], [tx, ty] = SEAT_CENTER[to];
+    return { transform: `translate(calc(var(--u) * ${tx - cx}), calc(var(--u) * ${ty - cy})) scale(0.35)`, opacity: 0 };
+  };
+
   return (
-    <div className="table-screen">
+    <div className={`board ${portraitOk ? 'portrait-ok' : ''}`}>
       <header className="bar">
-        <button className="code-chip" onClick={copy} title="Copy invite link">
-          <span className="code-label">Table</span> {state.code}
-          <span className="copied" aria-live="polite">{copied ? 'Link copied' : ''}</span>
-        </button>
-        <div className={`trump-chip ${view?.trump ? '' : 'none'}`}>
-          {view?.trump ? (
-            <>
-              <span className={`trump-suit ${isRed(view.trump) ? 'red' : ''}`}>{SUIT_SYMBOL[view.trump]}</span>
-              <span>{view.blind ? 'Blind trump' : 'Trump'}</span>
-            </>
-          ) : <span>No trump</span>}
+        <div className="bar-left">
+          <button className="chip code-chip" onClick={copy} title="Copy invite link">
+            <span className="dim">Table</span>{state.code}
+            <span className="copied" aria-live="polite">{copied ? 'Link copied' : ''}</span>
+          </button>
+          {!state.started && onLeave && <button className="link" onClick={onLeave}>Leave</button>}
         </div>
-        <button className="score-chip" onClick={() => setShowResults(true)}>
-          <span className="team-a">A {state.handsWon[0]}</span>
-          <span className="vs">hands won</span>
-          <span className="team-b">B {state.handsWon[1]}</span>
+        <button className="chip match" onClick={() => setShowResults(true)} title="Results">
+          <span className="a">{teamName(0)}</span><span className="n">{state.handsWon[0]}</span>
+          <span className="sep" />
+          <span className="n">{state.handsWon[1]}</span><span className="b">{teamName(1)}</span>
+          <small>{target ? `first to ${target}` : 'matches'}</small>
         </button>
+        <div className="bar-right" />
       </header>
 
-      {pauseText && <div className="pause" role="status">{pauseText}</div>}
-
-      <section className="cloth">
-        {([0, 1, 2, 3] as Seat[]).map((seat) => {
-          const pos = posOf(seat);
-          const s = seats[seat];
-          const turn = view?.phase === 'playing' && view.turn === seat;
-          const isChooser = state.started && view?.chooser === seat;
-          if (pos === 'bottom' && you !== null) return null;
-          return (
-            <div key={seat} className={`seat ${pos} team${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''}`}>
-              <div className="seat-name">{seatLabel(seat)}</div>
-              <div className="seat-meta">
-                {teamTag(seat)}
-                {isChooser && <span className="badge">chooser</span>}
-                {view && view.dealer === seat && <span className="badge quiet">dealer</span>}
-              </div>
-              {view && view.handCounts[seat] > 0 && <div className="backs" aria-label={`${view.handCounts[seat]} cards`}>
-                {Array.from({ length: Math.min(view.handCounts[seat], 13) }).map((_, i) => <span key={i} />)}
-              </div>}
-              {canTakeSeat(seat) && (
-                <button className="btn small" onClick={() => send('sit', { seat, name })}>
-                  {state.started ? 'Take this seat' : 'Sit here'}
-                </button>
-              )}
-            </div>
-          );
-        })}
-
-        <div className="trick" aria-label="Cards on the table">
-          {shownTrick.map((p) => (
-            <div key={`${p.card.r}${p.card.s}`} className={`slot ${posOf(p.seat)} ${view?.trick.length ? '' : 'settled'}`}>
-              <CardFace card={p.card} small highlight={trickWinner === p.seat} />
-            </div>
-          ))}
-          {!state.started && (
-            <div className="center-msg">
-              {seats.filter(Boolean).length < 4
-                ? <span>{seats.filter(Boolean).length} of 4 seated. Partners sit opposite.</span>
-                : you !== null
-                  ? <button className="btn primary" onClick={() => send('start')}>Toss and deal</button>
-                  : <span>Table is full.</span>}
-              {onLeave && <button className="link" onClick={onLeave}>Leave table</button>}
-            </div>
+      {view?.trump && (
+        <div className="trump">
+          <div className={`tile ${isRed(view.trump) ? 'red' : ''}`}>{SUIT_SYMBOL[view.trump]}</div>
+          <span>{view.blind ? 'Blind trump' : 'Trump'}</span>
+          {view.blindCard && view.tricks[0] + view.tricks[1] === 0 && (
+            <div className="legend">picked by {seatName(view.chooser)}</div>
           )}
-          {view && choosing && !iChoose && (
-            <div className="center-msg">{seatLabel(view.chooser)} is choosing trump{view.phase === 'blind' ? ' blind' : ''}.</div>
-          )}
-          {view?.phase === 'done' && view.result && (
-            <div className="center-msg result">
-              <strong>{teamName(view.result.winner)} wins hand {view.handNo}</strong>
-              <span>{view.tens[view.result.winner]} tens, {view.tricks[view.result.winner]} tricks{view.result.early ? ', locked early' : ''}</span>
-              {you !== null && <button className="btn primary" onClick={() => send('nextHand')}>Deal next hand</button>}
-            </div>
-          )}
-        </div>
-
-        {view && view.blindCard && view.phase === 'playing' && view.tricks[0] + view.tricks[1] === 0 && view.trick.length === 0 && (
-          <div className="blind-reveal">
-            Blind pick: <CardFace card={view.blindCard} small /> by {seatLabel(view.chooser)}
-          </div>
-        )}
-      </section>
-
-      {view && state.started && (
-        <div className="tally">
-          <span className="team-a">Team A: {view.tens[0]} tens, {view.tricks[0]} tricks</span>
-          <span className="team-b">Team B: {view.tens[1]} tens, {view.tricks[1]} tricks</span>
+          {you !== null && <div className="legend"><i />tinted in your hand</div>}
         </div>
       )}
 
-      {/* trump choice */}
+      {pauseText && <div className="pause" role="status">{pauseText}</div>}
+
+      <div className="felt" />
+
+      {([0, 1, 2, 3] as Seat[]).map((seat) => {
+        const pos = posOf(seat);
+        const s = seats[seat];
+        const turn = view?.phase === 'playing' && view.turn === seat && !state.paused;
+        const isChooser = state.started && view && view.chooser === seat;
+        const mine = seat === you;
+        const count = view && !mine ? view.handCounts[seat] : 0;
+        return (
+          <div key={seat} className={`seat s-${pos} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
+            <div className="avatar" aria-hidden="true">
+              {isChooser && <span className="crown" title="Chose trump">👑</span>}
+              {s ? initials(s.name) : '+'}
+            </div>
+            <div className={`plate ${mine && myTurn ? 'me-turn' : ''}`}>
+              {mine && myTurn ? 'Your turn' : seatName(seat)}
+              {pos === 'top' && count > 0 && <span className="cnt">{count} cards</span>}
+            </div>
+            {(pos === 'left' || pos === 'right') && count > 0 && <div className="count">{count} cards</div>}
+            {canTakeSeat(seat) && (
+              <button className="btn tiny" onClick={() => send('sit', { seat, name })}>
+                {state.started ? 'Take seat' : 'Sit here'}
+              </button>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="trick" aria-label="Cards on the table">
+        {onFelt.plays.map((p) => {
+          const pos = posOf(p.seat);
+          return (
+            <CardFace key={`${p.card.r}${p.card.s}`} card={p.card} className={`t-${pos} ${onFelt.flying ? 'flying' : ''}`}
+              highlight={onFelt.winner === p.seat}
+              style={onFelt.flying && onFelt.winner !== undefined ? flyStyle(pos, posOf(onFelt.winner)) : undefined} />
+          );
+        })}
+        {sweep && !sweep.flying && (
+          <div className="won-tag" role="status">{sweep.winner === you ? 'You win' : `${seatName(sweep.winner)} wins`} the hand</div>
+        )}
+      </div>
+
+      {/* felt messages */}
+      {!state.started && (
+        <div className="felt-msg">
+          <p>{seated < 4 ? `${seated} of 4 seated. Partners sit opposite.` : 'Everyone is seated.'}</p>
+          <div className="seg" role="group" aria-label="Series length">
+            <button className={target === 4 ? 'on' : ''} disabled={you === null} onClick={() => send('setSeries', { target: 4 })}>Best of 7</button>
+            <button className={target === null ? 'on' : ''} disabled={you === null} onClick={() => send('setSeries', { target: null })}>No limit</button>
+          </div>
+          {seated === 4 && you !== null && <button className="btn primary" onClick={() => send('start')}>Toss and deal</button>}
+        </div>
+      )}
+      {state.started && !view && state.seriesWinner === null && (
+        <div className="felt-msg">
+          <p><strong>Series {state.seriesNo}</strong></p>
+          {you !== null && <button className="btn primary" onClick={() => send('nextHand')}>Deal first match</button>}
+        </div>
+      )}
+      {view && (view.phase === 'choosing' || view.phase === 'blind') && !iChoose && (
+        <div className="felt-msg quiet"><p>{seatName(view.chooser)} is choosing trump{view.phase === 'blind' ? ' blind' : ''}.</p></div>
+      )}
       {view && iChoose && view.phase === 'choosing' && (
-        <div className="choose">
+        <div className="felt-msg choose">
           <p>You choose trump. Pick a suit from your five cards, or go blind.</p>
           <div className="suits">
             {(['S', 'H', 'D', 'C'] as Suit[]).map((s) => (
               <button key={s} className={`suit-btn ${isRed(s) ? 'red' : ''}`} disabled={state.paused}
-                onClick={() => send('nameTrump', { suit: s })} aria-label={`Make ${SUIT_NAME[s]} trump`}>
-                {SUIT_SYMBOL[s]}
-              </button>
+                onClick={() => send('nameTrump', { suit: s })} aria-label={`Make ${SUIT_NAME[s]} trump`}>{SUIT_SYMBOL[s]}</button>
             ))}
             <button className="btn" disabled={state.paused} onClick={() => send('goBlind')}>Go blind</button>
           </div>
         </div>
       )}
       {view && iChoose && view.phase === 'blind' && (
-        <div className="choose">
+        <div className="felt-msg choose">
           <p>Tap one of your eight hidden cards. Its suit becomes trump.</p>
           <div className="blind-row">
             {Array.from({ length: view.blindSlots }).map((_, i) => (
@@ -284,25 +369,55 @@ function Table({ state, send, name, onLeave }: {
           </div>
         </div>
       )}
-
-      {/* your hand */}
-      {you !== null && (
-        <footer className={`me team${you % 2} ${myTurn ? 'turn' : ''}`}>
-          <div className="me-line">
-            <span className="seat-name">{seatLabel(you)}</span>
-            <span className="seat-meta">{teamName(you % 2)}{view?.chooser === you && state.started && <span className="badge">chooser</span>}</span>
-            <span className="prompt">{myTurn ? 'Your turn' : view?.phase === 'playing' ? `${seatLabel(view.turn)} to play` : ''}</span>
-            {!state.started && <button className="link" onClick={() => send('standUp')}>Stand up</button>}
-          </div>
-          <div className="hand" style={{ ['--n' as any]: hand.length }}>
-            {hand.map((c) => (
-              <CardFace key={`${c.r}${c.s}`} card={c}
-                onClick={myTurn ? () => send('play', { card: c }) : undefined}
-                disabled={myTurn && !isLegal(c)} />
-            ))}
-          </div>
-        </footer>
+      {view?.phase === 'done' && view.result && !(sweep && !sweep.flying) && (
+        <div className="felt-msg result">
+          {state.seriesWinner !== null ? (
+            <>
+              <strong>{teamName(state.seriesWinner)} win the series {state.handsWon[state.seriesWinner]} to {state.handsWon[1 - state.seriesWinner]}</strong>
+              <span>Series won: {teamName(0)} {state.seriesWon[0]}, {teamName(1)} {state.seriesWon[1]}</span>
+              {you !== null && <button className="btn primary" onClick={() => send('newSeries')}>Start new series</button>}
+            </>
+          ) : (
+            <>
+              <strong>{teamName(view.result.winner)} win match {view.handNo}</strong>
+              <span>{plural(view.tens[view.result.winner], 'ten')}, {plural(view.tricks[view.result.winner], 'hand')}{view.result.early ? ', locked early' : ''}</span>
+              {you !== null && <button className="btn primary" onClick={() => send('nextHand')}>Deal next match</button>}
+            </>
+          )}
+        </div>
       )}
+
+      {state.started && (
+        <>
+          <TeamPanel team={myTeam} name={teamName(myTeam)} hands={view?.tricks[myTeam] ?? 0} tens={tensOf(myTeam)}
+            mine={you !== null} side="left" onRename={(n) => send('setTeamName', { name: n })} />
+          <TeamPanel team={otherTeam} name={teamName(otherTeam)} hands={view?.tricks[otherTeam] ?? 0} tens={tensOf(otherTeam)}
+            mine={false} side="right" onRename={() => {}} />
+        </>
+      )}
+      {!state.started && you !== null && (
+        <section className="team-panel left t0 lobby-names">
+          <p>Name your team</p>
+          <TeamNameField current={teamName(myTeam)} onSave={(n) => send('setTeamName', { name: n })} />
+        </section>
+      )}
+
+      {you !== null && hand.length > 0 && (
+        <div className={`hand ${myTurn ? 'live' : ''}`} style={{ ['--n' as any]: hand.length }}>
+          {hand.map((c) => (
+            <CardFace key={`${c.r}${c.s}`} card={c} trump={c.s === view?.trump}
+              className={myTurn && isLegal(c) ? 'up' : ''}
+              onClick={myTurn ? () => send('play', { card: c }) : undefined}
+              disabled={myTurn && !isLegal(c)} />
+          ))}
+        </div>
+      )}
+
+      <div className="rotate" role="dialog" aria-label="Rotate your phone">
+        <div className="rotate-phone" aria-hidden="true" />
+        <p>Turn your phone sideways. The table is built for landscape.</p>
+        <button className="link" onClick={() => setPortraitOk(true)}>Continue anyway</button>
+      </div>
 
       {showResults && (
         <div className="sheet" role="dialog" aria-label="Results" onClick={() => setShowResults(false)}>
@@ -311,16 +426,20 @@ function Table({ state, send, name, onLeave }: {
               <h2>Results</h2>
               <button className="link" onClick={() => setShowResults(false)}>Close</button>
             </div>
-            <p className="totals"><span className="team-a">Team A {state.handsWon[0]}</span> hands won <span className="team-b">Team B {state.handsWon[1]}</span></p>
-            {state.results.length === 0 ? <p className="muted">No hands finished yet.</p> : (
+            {target !== null && (
+              <p className="totals">Series won: <span className="team-a">{teamName(0)} {state.seriesWon[0]}</span>, <span className="team-b">{teamName(1)} {state.seriesWon[1]}</span></p>
+            )}
+            <p className="totals">{target !== null ? `Series ${state.seriesNo}: ` : 'Matches won: '}<span className="team-a">{teamName(0)} {state.handsWon[0]}</span>, <span className="team-b">{teamName(1)} {state.handsWon[1]}</span></p>
+            {state.results.length === 0 ? <p className="muted">No matches finished yet.</p> : (
               <div className="results-scroll">
                 <table>
-                  <thead><tr><th>Hand</th><th>Chooser</th><th>Trump</th><th>Winner</th><th>Tens</th><th>Tricks</th></tr></thead>
+                  <thead><tr>{target !== null && <th>Series</th>}<th>Match</th><th>Chooser</th><th>Trump</th><th>Winner</th><th>Tens</th><th>Hands</th></tr></thead>
                   <tbody>
                     {state.results.slice().reverse().map((r) => (
-                      <tr key={r.handNo}>
+                      <tr key={`${r.series}-${r.handNo}`}>
+                        {target !== null && <td>{r.series}</td>}
                         <td>{r.handNo}</td>
-                        <td>{seatLabel(r.chooser)}</td>
+                        <td>{seatName(r.chooser)}</td>
                         <td><span className={isRed(r.trump) ? 'red' : ''}>{SUIT_SYMBOL[r.trump]}</span>{r.blind ? ' blind' : ''}</td>
                         <td className={r.winner === 0 ? 'team-a' : 'team-b'}>{teamName(r.winner)}{r.tens[r.winner] === 4 ? ', all four tens' : ''}</td>
                         <td>{r.tens[0]} to {r.tens[1]}</td>
@@ -335,6 +454,18 @@ function Table({ state, send, name, onLeave }: {
         </div>
       )}
     </div>
+  );
+}
+
+function TeamNameField({ current, onSave }: { current: string; onSave: (n: string) => void }) {
+  const [draft, setDraft] = useState(current);
+  useEffect(() => { setDraft(current); }, [current]);
+  const dirty = draft.trim() && draft.trim() !== current;
+  return (
+    <form className="rename" onSubmit={(e) => { e.preventDefault(); if (dirty) onSave(draft.trim()); }}>
+      <input value={draft} maxLength={20} aria-label="Team name" onChange={(e) => setDraft(e.target.value)} />
+      <button className="btn tiny primary" type="submit" disabled={!dirty}>Save</button>
+    </form>
   );
 }
 

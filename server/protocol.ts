@@ -12,11 +12,16 @@ export interface SeatInfo {
 
 export interface RoomState {
   code: string;
+  teamNames: [string, string];
   seats: (SeatInfo | null)[];
   started: boolean;
   paused: boolean;
   nextChooser: Seat;
   handsWon: [number, number];
+  seriesTarget: number | null;
+  seriesNo: number;
+  seriesWon: [number, number];
+  seriesWinner: 0 | 1 | null;
   results: ResultRow[];
   you: Seat | null;
   view: PlayerView | null;

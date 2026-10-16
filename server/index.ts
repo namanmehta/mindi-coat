@@ -59,6 +59,9 @@ io.on('connection', (socket) => {
   }));
   socket.on('sit', handle((p: { seat: number; name: string }) => rooms.sit(room(), socket.id, Number(p?.seat), p?.name)));
   socket.on('standUp', handle(() => rooms.standUp(room(), socket.id)));
+  socket.on('setTeamName', handle((p: { name: string }) => rooms.setTeamName(room(), socket.id, p?.name)));
+  socket.on('setSeries', handle((p: { target: number | null }) => rooms.setSeries(room(), socket.id, p?.target ?? null)));
+  socket.on('newSeries', handle(() => rooms.newSeries(room(), socket.id)));
   socket.on('start', handle(() => rooms.start(room(), socket.id)));
   socket.on('nextHand', handle(() => rooms.nextHand(room(), socket.id)));
   socket.on('nameTrump', handle((p: { suit: any }) => rooms.nameTrump(room(), socket.id, p?.suit)));

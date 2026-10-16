@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  Card, Seat, Sitting, Suit, newDeck, newSitting, startHand, nameTrump, goBlind, pickBlind,
+  Card, Seat, Sitting, Suit, newDeck, newSitting, startHand, nameTrump, goBlind, pickBlind, newSeries,
   playCard, legalMoves, trickWinner, lockedWinner, viewFor, cardId, RuleError, teamOf,
 } from './engine';
 
@@ -172,10 +172,10 @@ describe('follow suit', () => {
 });
 
 describe('fuzz: random full hands', () => {
-  it('every hand resolves, invariants hold, chooser rotates right', () => {
+  it('every hand resolves, invariants hold, winning team chooses next', () => {
     const rng = mulberry32(42);
     let s = newSitting(rng);
-    let early = 0, blind = 0;
+    let early = 0, blind = 0, passed = 0, kept = 0;
     for (let n = 0; n < 3000; n++) {
       const chooser = s.nextChooser;
       s = startHand(s, rng);
@@ -207,14 +207,73 @@ describe('fuzz: random full hands', () => {
       const held = h.hands.flat().length;
       expect(held + h.tricksPlayed * 4).toBe(52);
       if (h.result!.early) early++; else expect(h.tricksPlayed).toBe(13);
-      expect(s.nextChooser).toBe((chooser + 1) % 4);
+      // winning team chooses: chooser's team won -> partner, lost -> player on chooser's right
+      if (h.result!.winner === teamOf(chooser)) { expect(s.nextChooser).toBe((chooser + 2) % 4); passed++; }
+      else { expect(s.nextChooser).toBe((chooser + 1) % 4); kept++; }
+      expect(teamOf(s.nextChooser)).toBe(h.result!.winner);
+      // tens ledger matches the counts and has no repeats
+      expect(h.tensTaken.length).toBe(h.tens[0] + h.tens[1]);
+      expect(new Set(h.tensTaken.map((t) => t.suit)).size).toBe(h.tensTaken.length);
+      for (const t of [0, 1]) expect(h.tensTaken.filter((x) => x.team === t).length).toBe(h.tens[t]);
     }
     expect(s.handsWon[0] + s.handsWon[1]).toBe(3000);
     expect(s.results.length).toBe(3000);
     expect(early).toBeGreaterThan(0);
     expect(blind).toBeGreaterThan(0);
+    expect(passed).toBeGreaterThan(0);
+    expect(kept).toBeGreaterThan(0);
     // sanity: team assignment
     expect([0, 1, 2, 3].map(teamOf)).toEqual([0, 1, 0, 1]);
+  });
+
+  it('best of 7: first to 4 matches wins the series, then a new series resets the count', () => {
+    const rng = mulberry32(99);
+    let s = newSitting(rng, 0, 4);
+    const playOut = () => {
+      s = startHand(s, rng);
+      s = nameTrump(s, s.hand!.chooser, 'S');
+      while (s.hand!.phase === 'playing') {
+        const h = s.hand!;
+        const m = legalMoves(h, h.turn);
+        s = playCard(s, h.turn, m[Math.floor(rng() * m.length)]);
+      }
+    };
+    for (let series = 1; series <= 5; series++) {
+      expect(s.seriesNo).toBe(series);
+      let matches = 0;
+      while (s.seriesWinner === null) {
+        playOut();
+        matches++;
+        expect(s.hand!.handNo).toBe(matches); // match number counts within the series
+        expect(Math.max(...s.handsWon)).toBeLessThanOrEqual(4);
+      }
+      expect(matches).toBeGreaterThanOrEqual(4);
+      expect(matches).toBeLessThanOrEqual(7);
+      expect(s.handsWon[s.seriesWinner]).toBe(4);
+      expect(() => startHand(s, rng)).toThrow('The series is over');
+      const chooserBefore = s.nextChooser;
+      s = newSeries(s);
+      expect(s.handsWon).toEqual([0, 0]);
+      expect(s.nextChooser).toBe(chooserBefore); // chooser rule carries across series
+    }
+    expect(s.seriesWon[0] + s.seriesWon[1]).toBe(5);
+    expect(s.results.every((r) => r.series >= 1 && r.series <= 5)).toBe(true);
+    expect(() => newSeries(s)).toThrow('not over');
+  });
+
+  it('no limit: matches keep counting, series never ends', () => {
+    const rng = mulberry32(5);
+    let s = newSitting(rng, 0, null);
+    for (let i = 0; i < 12; i++) {
+      s = startHand(s, rng);
+      s = nameTrump(s, s.hand!.chooser, 'H');
+      while (s.hand!.phase === 'playing') {
+        const h = s.hand!;
+        s = playCard(s, h.turn, legalMoves(h, h.turn)[0]);
+      }
+    }
+    expect(s.handsWon[0] + s.handsWon[1]).toBe(12);
+    expect(s.seriesWinner).toBe(null);
   });
 
   it('cannot start a new hand while one is in progress', () => {

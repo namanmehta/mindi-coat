@@ -102,13 +102,14 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     let s = cs[2].last!;
     expect(s.results.length).toBe(1);
     expect(s.handsWon[0] + s.handsWon[1]).toBe(1);
-    expect(s.nextChooser).toBe((chooser + 1) % 4);
+    const expectedNext = s.results[0].winner === chooser % 2 ? (chooser + 2) % 4 : (chooser + 1) % 4;
+    expect(s.nextChooser).toBe(expectedNext);
 
     // second hand: blind trump
     expect((await emit(cs[3], 'nextHand')).ok).toBe(true);
     await settle();
     const c2 = cs[0].last!.view!.chooser;
-    expect(c2).toBe((chooser + 1) % 4);
+    expect(c2).toBe(expectedNext);
     expect((await emit(cs[c2], 'goBlind')).ok).toBe(true);
     await settle();
     expect(cs[c2].last!.view!.blindSlots).toBe(8);
@@ -135,7 +136,7 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     await emit(cs[v.chooser], 'nameTrump', { suit: 'S' });
     await settle();
     const t = cs[0].last!.view!.turn;
-    const mover = cs[t], other = cs[(t + 1) % 4];
+    const mover = cs[t], other = cs[(t + 2) % 4]; // never the next player
     const [a, b] = await Promise.all([
       emit(mover, 'play', { card: mover.last!.view!.legal[0] }),
       emit(other, 'play', { card: other.last!.view!.myHand[0] }),
@@ -208,6 +209,60 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     expect(ghost.last!.you).toBe(null);
     for (const c of [...cs, sub, ghost]) c.s.close();
   });
+
+  it('each team names itself; only seated players, only their own team', async () => {
+    const { cs } = await fullTable();
+    expect(cs[0].last!.teamNames).toEqual(['Team A', 'Team B']);
+    expect((await emit(cs[0], 'setTeamName', { name: '  Delhi   Dhurandhars ' })).ok).toBe(true);
+    expect((await emit(cs[1], 'setTeamName', { name: 'Tampa Tigers' })).ok).toBe(true);
+    await settle();
+    expect(cs[3].last!.teamNames).toEqual(['Delhi Dhurandhars', 'Tampa Tigers']);
+    // partner of seat 0 renames team A again
+    expect((await emit(cs[2], 'setTeamName', { name: 'Lions' })).ok).toBe(true);
+    // duplicate of other team rejected; blank rejected
+    expect((await emit(cs[3], 'setTeamName', { name: 'lions' })).ok).toBe(false);
+    expect((await emit(cs[3], 'setTeamName', { name: '   ' })).ok).toBe(false);
+    // spectators cannot rename
+    const spec = await client('Spec');
+    await emit(spec, 'join', { code: cs[0].last!.code, token: spec.token, name: 'Spec' });
+    expect((await emit(spec, 'setTeamName', { name: 'Hijack' })).ok).toBe(false);
+    await settle();
+    expect(cs[1].last!.teamNames).toEqual(['Lions', 'Tampa Tigers']);
+    for (const c of [...cs, spec]) c.s.close();
+  });
+
+  it('series: chosen in the lobby, ends at 4 wins, new series resets', async () => {
+    const { cs } = await fullTable();
+    expect(cs[0].last!.seriesTarget).toBe(4); // best of 7 by default
+    expect((await emit(cs[1], 'setSeries', { target: 9 })).ok).toBe(false);
+    expect((await emit(cs[1], 'setSeries', { target: null })).ok).toBe(true);
+    await settle();
+    expect(cs[3].last!.seriesTarget).toBe(null);
+    expect((await emit(cs[1], 'setSeries', { target: 4 })).ok).toBe(true);
+    await emit(cs[0], 'start');
+    expect((await emit(cs[1], 'setSeries', { target: null })).ok).toBe(false); // locked once started
+    expect((await emit(cs[0], 'newSeries')).ok).toBe(false); // not over yet
+    let st = cs[0].last!;
+    for (let m = 0; m < 7 && cs[0].last!.seriesWinner === null; m++) {
+      if (m > 0) expect((await emit(cs[m % 4], 'nextHand')).ok).toBe(true);
+      await playHand(cs);
+    }
+    await settle();
+    st = cs[2].last!;
+    expect(st.seriesWinner).not.toBe(null);
+    expect(st.handsWon[st.seriesWinner!]).toBe(4);
+    expect(st.seriesWon[st.seriesWinner!]).toBe(1);
+    expect((await emit(cs[0], 'nextHand')).error).toMatch(/series is over/);
+    expect((await emit(cs[3], 'newSeries')).ok).toBe(true);
+    await settle();
+    st = cs[1].last!;
+    expect(st.handsWon).toEqual([0, 0]);
+    expect(st.seriesNo).toBe(2);
+    expect((await emit(cs[0], 'nextHand')).ok).toBe(true);
+    await settle();
+    expect(cs[0].last!.view!.handNo).toBe(1);
+    for (const c of cs) c.s.close();
+  }, 120000);
 
   it('bad room code is a clear error', async () => {
     const c = await client('Zed');
