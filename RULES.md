@@ -23,7 +23,7 @@ This is the specification the game engine implements. If the code and this file 
 ## Each match
 
 1. **First deal.** Every player gets 5 cards.
-2. **Trump choice.** The chooser looks at their own 5 cards and does one of:
+2. **Trump choice.** The chooser looks at their own 5 cards and does one of the options below. **Until trump is set, no other player sees their own cards** (they see 5 face-down cards), so partners cannot signal. The server does not send those cards at all.
    * **Name a suit.** Any of the four suits. It does not have to be in their hand.
    * **Go blind.** The chooser's own next 8 cards are shown face down. The chooser taps one. That card is revealed to all players, its suit becomes trump, and it stays in the chooser's hand.
 3. **Trump is announced** to all players immediately in both cases.
@@ -47,6 +47,8 @@ This is the specification the game engine implements. If the code and this file 
   * If the chooser's team **lost**, the player on the chooser's **right** chooses next (A1 chose and lost, so B1 chooses).
 
 ## Scoring and display
+
+* **Hand order:** cards are sorted ♥ ♠ ♦ ♣ so red and black alternate. If a suit is missing, the order is adjusted so colours still alternate where possible.
 
 * **Live, during a match:** hands won per team, and which of the four tens (by suit) each team has taken. Current trump, whose turn.
 * **After each hand:** the winning card is highlighted with "Name wins the hand", then the four cards slide toward the winner and the table clears.

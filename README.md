@@ -17,6 +17,13 @@ client/     React app. Asks the server to act; never decides legality itself.
 * A player is identified by a random token saved in their browser, so a refresh or a dropped connection puts them back in their seat with their hand.
 * Disconnect: the game pauses for 2 minutes. After that, anyone with the code can take the seat (and the hand). Nothing is ever auto-played.
 
+## Playing on phones
+
+The table is built for phones held sideways. For the most room, install it as an app (no address bar):
+
+* **iPhone:** open the link in Safari, tap **Share**, then **Add to Home Screen**.
+* **Android:** open the link in Chrome and tap **Install app** (or use the full-screen button on the table).
+
 ## Run locally
 
 Needs Node 20 or newer.

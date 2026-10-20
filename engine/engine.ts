@@ -291,6 +291,8 @@ export interface PlayerView {
   legal: Card[];
 }
 
+export const choosingPhase = (h: HandState) => h.phase === 'choosing' || h.phase === 'blind';
+
 export function viewFor(h: HandState, seat: Seat | null): PlayerView {
   return {
     you: seat,
@@ -298,7 +300,8 @@ export function viewFor(h: HandState, seat: Seat | null): PlayerView {
     chooser: h.chooser,
     dealer: h.dealer,
     phase: h.phase,
-    myHand: seat === null ? [] : h.hands[seat],
+    // While trump is being chosen, only the chooser may see cards, so partners can't signal.
+    myHand: seat === null || (choosingPhase(h) && seat !== h.chooser) ? [] : h.hands[seat],
     handCounts: h.hands.map((c) => c.length),
     blindSlots: h.phase === 'blind' && seat === h.chooser ? h.pending[seat].length : 0,
     trump: h.trump,

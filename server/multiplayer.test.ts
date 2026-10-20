@@ -79,7 +79,9 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     const chooser = st.view!.chooser;
     for (let i = 0; i < 4; i++) {
       const v = cs[i].last!.view!;
-      expect(v.myHand.length).toBe(5);
+      // only the chooser receives cards while trump is chosen; nothing to peek at in the payload
+      expect(v.myHand.length).toBe(i === chooser ? 5 : 0);
+      if (i !== chooser) expect(JSON.stringify(cs[i].last).match(/"s":"[SHDC]"/g) ?? []).toEqual([]);
       expect(cs[i].last!.you).toBe(i);
     }
     // everyone at the table sees who is watching
@@ -87,11 +89,8 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     expect(cs[3].last!.watchers).toEqual(['Eve']);
     // spectator sees no cards, and nobody's payload contains another hand
     expect(extra.last!.view!.myHand).toEqual([]);
-    const others = cs[1].last!.view!.myHand.map((c) => `${c.r}${c.s}`);
-    const leaked = JSON.stringify(cs[0].last).match(/"s":"[SHDC]"/g) ?? [];
-    const zeroHand = cs[0].last!.view!.myHand.length;
-    expect(leaked.length).toBe(zeroHand);
-    expect(others.length).toBe(5);
+    const leaked = JSON.stringify(cs[chooser].last).match(/"s":"[SHDC]"/g) ?? [];
+    expect(leaked.length).toBe(5); // the chooser's payload holds exactly their own 5 cards
 
     // wrong player cannot choose trump
     const wrong = cs[(chooser + 1) % 4];

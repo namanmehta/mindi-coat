@@ -85,10 +85,24 @@ describe('trump choice', () => {
     expect(() => pickBlind(s, 0, 0)).toThrow(RuleError);
   });
 
+  it('while trump is chosen only the chooser sees cards; everyone sees all 13 after', () => {
+    let s = base();
+    for (const seat of [0, 2, 3] as Seat[]) {
+      expect(viewFor(s.hand!, seat).myHand).toEqual([]);
+      expect(viewFor(s.hand!, seat).handCounts).toEqual([5, 5, 5, 5]); // counts are public
+    }
+    expect(viewFor(s.hand!, 1).myHand.length).toBe(5);
+    s = goBlind(s, 1);
+    expect(viewFor(s.hand!, 3).myHand).toEqual([]); // still hidden during the blind pick
+    s = pickBlind(s, 1, 2);
+    for (const seat of [0, 1, 2, 3] as Seat[]) expect(viewFor(s.hand!, seat).myHand.length).toBe(13);
+  });
+
   it('views never leak other hands or pending cards', () => {
     const s = goBlind(base(), 1);
     const v = viewFor(s.hand!, 0);
-    expect(v.myHand.length).toBe(5);
+    expect(v.myHand.length).toBe(0); // hidden until trump is set
+    expect(viewFor(s.hand!, 1).myHand.length).toBe(5);
     expect(JSON.stringify(v)).not.toContain('pending');
     expect(v.handCounts).toEqual([5, 5, 5, 5]);
   });
