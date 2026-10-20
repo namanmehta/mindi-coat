@@ -8,6 +8,8 @@ export interface SeatInfo {
   holdUntil: number | null;
   /** window expired: a new player may take this seat */
   open: boolean;
+  /** a bot plays this seat */
+  bot: boolean;
 }
 
 export interface RoomState {

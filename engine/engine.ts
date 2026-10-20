@@ -37,6 +37,8 @@ export interface HandState {
   turn: Seat;
   trick: Play[];
   lastTrick: { plays: Play[]; winner: Seat } | null;
+  /** every finished hand this match, in order: public, everyone saw these cards */
+  history: { plays: Play[]; winner: Seat }[];
   tricks: [number, number];
   tens: [number, number];
   /** which ten went to which team, in capture order */
@@ -131,6 +133,7 @@ export function startHand(sitting: Sitting, rng: Rng, deck?: Card[]): Sitting {
     turn: chooser,
     trick: [],
     lastTrick: null,
+    history: [],
     tricks: [0, 0],
     tens: [0, 0],
     tensTaken: [],
@@ -237,7 +240,7 @@ export function playCard(sitting: Sitting, seat: Seat, card: Card): Sitting {
   const won = lockedWinner(tens, tricks);
 
   let next: HandState = {
-    ...h, hands, trick: [], lastTrick: { plays: trick, winner }, tricks, tens, tensTaken, tricksPlayed, turn: winner,
+    ...h, hands, trick: [], lastTrick: { plays: trick, winner }, history: [...h.history, { plays: trick, winner }], tricks, tens, tensTaken, tricksPlayed, turn: winner,
   };
   if (won === null) {
     if (tricksPlayed === 13) throw new Error('Invariant: 13 tricks played without a result');

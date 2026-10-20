@@ -59,7 +59,9 @@ This is the specification the game engine implements. If the code and this file 
 ## Players and disconnects
 
 * Players join a private room with a display name and a room code. No accounts.
-* Real players only. A seat is never filled by a bot.
+* Seats are filled by people. A bot only plays when a seated player adds one: to an empty seat before the game, or to a seat whose player left and did not return within 2 minutes.
+* Bots are always labeled (robot avatar, "Bots" on the table code). A person can take over a bot's seat at any time, with its cards.
+* A bot only knows what a player in its seat would know: its own cards and the cards played. It never sees hidden cards.
 * If a player disconnects, their seat is held for 2 minutes. During that time the game pauses for everyone.
 * If they return, they resume with their full hand and the current state.
 * If they do not return within 2 minutes, the game stays paused. A new player may take the empty seat (they receive the departed player's hand). Otherwise the table can be closed.

@@ -94,6 +94,9 @@ function Pencil() {
 function Eye() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12z" /><circle cx="12" cy="12" r="3.2" /></svg>;
 }
+function Robot() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 8V4M9 13h.01M15 13h.01M9 17h6" /></svg>;
+}
 function Expand() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
 }
@@ -337,11 +340,21 @@ function Table({ state, send, name, onLeave, flash }: {
     }).filter(Boolean).join(' ');
   }
 
-  const canTakeSeat = (seat: number) => {
+  /** What a viewer can do with a seat: sit in it, fill it with a bot, or remove a bot. */
+  const seatActions = (seat: number): { label: string; ev: string; payload: any }[] => {
     const s = seats[seat];
-    if (you !== null) return !state.started && !s;
-    return state.started ? !!s?.open : !s;
+    const out: { label: string; ev: string; payload: any }[] = [];
+    if (!state.started) {
+      if (!s || (s.bot && you === null)) out.push({ label: 'Sit here', ev: 'sit', payload: { seat, name } });
+      if (you !== null && !s) out.push({ label: 'Add bot', ev: 'addBot', payload: { seat } });
+      if (you !== null && s?.bot) out.push({ label: 'Remove bot', ev: 'removeBot', payload: { seat } });
+    } else {
+      if (you === null && (s?.open || s?.bot)) out.push({ label: 'Take seat', ev: 'sit', payload: { seat, name } });
+      if (you !== null && s?.open) out.push({ label: 'Add bot', ev: 'addBot', payload: { seat } });
+    }
+    return out;
   };
+  const hasBots = seats.some((s) => s?.bot);
   const tensOf = (t: number) => (view?.tensTaken ?? []).filter((x) => x.team === t).map((x) => x.suit);
 
   const onFelt: { plays: Play[]; winner?: Seat; flying: boolean } =
@@ -363,6 +376,7 @@ function Table({ state, send, name, onLeave, flash }: {
         <div className="top-left">
           <button className="code glass capsule" onClick={copy} aria-label={`Table ${state.code}. Copy invite link`}>
             <b>{state.code}</b>
+            {hasBots && <span className="watch" title="This table includes bots"><Robot />Bots</span>}
             {state.watchers.length > 0 && (
               <span className="watch" title={`Watching: ${state.watchers.join(', ')}`}
                 onClick={(e) => { e.stopPropagation(); flash(`Watching: ${state.watchers.join(', ')}`); }}>
@@ -405,17 +419,19 @@ function Table({ state, send, name, onLeave, flash }: {
           <div key={seat} className={`seat s-${pos} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
             <div className="av" aria-hidden="true">
               {isChooser && <Crown />}
-              {s ? initials(s.name) : '+'}
+              {s ? (s.bot ? <span className="bot-face"><Robot /></span> : initials(s.name)) : '+'}
             </div>
             <div className="name">
               <span className="nm">{seatName(seat)}</span>
               {s && !s.connected ? <span className="cnt">{s.open ? 'Left' : 'Reconnecting'}</span>
                 : count > 0 && <span className="cnt">{plural(count, 'card')}</span>}
             </div>
-            {canTakeSeat(seat) && (
-              <button className="pill small glass-btn" onClick={() => send('sit', { seat, name })}>
-                {state.started ? 'Take seat' : 'Sit here'}
-              </button>
+            {seatActions(seat).length > 0 && (
+              <div className="seat-actions">
+                {seatActions(seat).map((a) => (
+                  <button key={a.label} className={`pill small ${a.ev === 'sit' ? 'glass-btn' : 'quiet-btn'}`} onClick={() => send(a.ev, a.payload)}>{a.label}</button>
+                ))}
+              </div>
             )}
           </div>
         );
@@ -437,8 +453,10 @@ function Table({ state, send, name, onLeave, flash }: {
 
       {/* lobby */}
       {!state.started && (
-        <div className="panel lobby glass">
-          <h2>{seated < 4 ? `${seated} of 4 seated. Partners sit opposite.` : 'Everyone is seated'}</h2>
+        <div className="status quiet-status">{seated < 4 ? `${seated} of 4 seated. Partners sit opposite.` : 'Everyone is seated'}</div>
+      )}
+      {!state.started && (
+        <div className="lobby glass">
           <div className="lobby-row">
             <div className="seg" role="group" aria-label="Series length">
               <button className={target === 4 ? 'on' : ''} disabled={you === null} onClick={() => send('setSeries', { target: 4 })}>Best of 7</button>
@@ -561,7 +579,7 @@ function Table({ state, send, name, onLeave, flash }: {
               <div><span className="k">{target !== null ? `Series ${state.seriesNo}` : 'Matches won'}</span><span className="v"><b className="a">{teamName(0)} {state.handsWon[0]}</b> <b className="b">{teamName(1)} {state.handsWon[1]}</b></span></div>
               {state.watchers.length > 0 && <div><span className="k">Watching</span><span className="v">{state.watchers.join(', ')}</span></div>}
             </div>
-            {state.results.length === 0 ? <p className="empty">No matches finished yet.</p> : (
+            {state.results.length === 0 ? <p className="sheet-empty">No matches finished yet.</p> : (
               <div className="results-scroll">
                 <table>
                   <thead><tr>{target !== null && <th>Series</th>}<th>Match</th><th>Chooser</th><th>Trump</th><th>Winner</th><th>Tens</th><th>Hands</th></tr></thead>

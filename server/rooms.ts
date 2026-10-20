@@ -2,6 +2,7 @@
 import {
   Seat, Sitting, Suit, Card, RuleError, newSitting, newSeries, startHand, nameTrump, goBlind, pickBlind, playCard, viewFor,
 } from '../engine/engine';
+import { botAct, botViewFor } from '../engine/bot';
 import { RoomState, RECONNECT_MS } from './protocol';
 
 interface SeatRec {
@@ -10,7 +11,19 @@ interface SeatRec {
   socketId: string | null;
   holdUntil: number | null;
   open: boolean;
+  /** a bot plays this seat */
+  bot?: boolean;
 }
+
+export interface BotSettings {
+  /** pause before a bot moves, so it feels like a person (ms) */
+  delayMs: number;
+  /** extra pause after a hand is won, so the sweep finishes first (ms) */
+  afterHandMs: number;
+  /** thinking time per move (ms) */
+  budgetMs: number;
+}
+const BOT_NAMES = ['Bot Raja', 'Bot Rani', 'Bot Mantri', 'Bot Sipahi'];
 
 export interface Room {
   code: string;
@@ -25,6 +38,7 @@ export interface Room {
   memberNames: Map<string, string>;
   /** matches needed to win a series: 4 = best of 7, null = no limit */
   seriesTarget: number | null;
+  botTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1
@@ -36,7 +50,14 @@ export class RoomManager {
     private rng: () => number = Math.random,
     private now: () => number = Date.now,
     private reconnectMs = RECONNECT_MS,
+    private botSettings: BotSettings = { delayMs: 900, afterHandMs: 1900, budgetMs: 250 },
   ) {}
+
+  /** Every state change goes through here: tell everyone, then let a bot move if it's a bot's turn. */
+  private changed(room: Room) {
+    this.onChange(room);
+    this.scheduleBot(room);
+  }
 
   private newCode(): string {
     for (;;) {
@@ -53,6 +74,7 @@ export class RoomManager {
       teamNames: ['Team A', 'Team B'],
       memberNames: new Map(),
       seriesTarget: 4,
+      botTimer: null,
     };
     this.rooms.set(room.code, room);
     return room;
@@ -83,7 +105,7 @@ export class RoomManager {
       if (name) rec.name = name;
       this.clearTimer(room, seat);
     }
-    this.onChange(room);
+    this.changed(room);
   }
 
   /** Take a seat: an empty one before the game, or an abandoned one during it. */
@@ -97,14 +119,14 @@ export class RoomManager {
     const target = room.seats[seat];
     if (room.sitting) {
       if (current !== null) throw new RuleError('You already have a seat');
-      if (!target || !target.open) throw new RuleError('That seat is taken');
+      if (!target || !(target.open || target.bot)) throw new RuleError('That seat is taken');
     } else {
-      if (target && target.token !== token) throw new RuleError('That seat is taken');
+      if (target && target.token !== token && !target.bot) throw new RuleError('That seat is taken');
       if (current !== null) room.seats[current] = null; // switching seats in the lobby
     }
     this.clearTimer(room, seat);
     room.seats[seat] = { name: cleanName, token, socketId, holdUntil: null, open: false };
-    this.onChange(room);
+    this.changed(room);
   }
 
   /** Leave your seat on purpose. In a game, the seat opens for a replacement right away. */
@@ -117,7 +139,62 @@ export class RoomManager {
     } else {
       room.seats[seat] = null;
     }
-    this.onChange(room);
+    this.changed(room);
+  }
+
+  /** A seated player fills an empty seat (lobby) or an abandoned one (mid-game) with a bot. */
+  addBot(room: Room, socketId: string, seat: number): void {
+    this.requireSeat(room, socketId);
+    if (![0, 1, 2, 3].includes(seat)) throw new RuleError('Invalid seat');
+    const target = room.seats[seat];
+    if (room.sitting ? !target?.open : !!target) throw new RuleError('That seat is taken');
+    const used = new Set(room.seats.map((r) => r?.name));
+    const name = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${seat + 1}`;
+    this.clearTimer(room, seat);
+    room.seats[seat] = { name, token: `bot:${room.code}:${seat}:${Math.floor(this.rng() * 1e9)}`, socketId: null, holdUntil: null, open: false, bot: true };
+    this.changed(room);
+  }
+
+  /** Lobby only: take a bot out of its seat. */
+  removeBot(room: Room, socketId: string, seat: number): void {
+    this.requireSeat(room, socketId);
+    if (room.sitting) throw new RuleError('Bots can be removed before the game starts. A player can take a bot\'s seat any time.');
+    if (!room.seats[seat]?.bot) throw new RuleError('No bot in that seat');
+    room.seats[seat] = null;
+    this.changed(room);
+  }
+
+  /** If it is a bot's decision, make it after a short, human-feeling pause. */
+  private scheduleBot(room: Room): void {
+    if (room.botTimer || !this.rooms.has(room.code)) return;
+    const who = this.botToAct(room);
+    if (who === null) return;
+    const h = room.sitting!.hand!;
+    const justWon = h.phase === 'playing' && h.trick.length === 0 && h.history.length > 0;
+    const delay = this.botSettings.delayMs + (justWon ? this.botSettings.afterHandMs : 0);
+    room.botTimer = setTimeout(() => {
+      room.botTimer = null;
+      if (this.botToAct(room) !== who) { this.scheduleBot(room); return; }
+      try {
+        const s = room.sitting!;
+        const a = botAct(botViewFor(s.hand!, who), this.rng, { budgetMs: this.botSettings.budgetMs });
+        room.sitting = a.type === 'name' ? nameTrump(s, who, a.suit)
+          : a.type === 'blind' ? goBlind(s, who)
+            : a.type === 'pick' ? pickBlind(s, who, a.index)
+              : playCard(s, who, a.card);
+      } catch (e) {
+        console.error('bot move failed', e);
+        return;
+      }
+      this.changed(room);
+    }, delay);
+  }
+
+  private botToAct(room: Room): Seat | null {
+    const h = room.sitting?.hand;
+    if (!h || h.phase === 'done' || this.paused(room)) return null;
+    const seat = (h.phase === 'playing' ? h.turn : h.chooser) as Seat;
+    return room.seats[seat]?.bot ? seat : null;
   }
 
   disconnect(socketId: string): void {
@@ -134,7 +211,7 @@ export class RoomManager {
         room.timers.set(i, setTimeout(() => this.expire(room, i), this.reconnectMs));
       }
       if (room.members.size === 0) room.emptySince = this.now();
-      this.onChange(room);
+      this.changed(room);
     }
   }
 
@@ -145,7 +222,7 @@ export class RoomManager {
     if (!rec || rec.socketId) return;
     if (room.sitting) { rec.open = true; rec.holdUntil = null; }
     else room.seats[seat] = null;
-    this.onChange(room);
+    this.changed(room);
   }
 
   private clearTimer(room: Room, seat: number) {
@@ -154,7 +231,7 @@ export class RoomManager {
   }
 
   paused(room: Room): boolean {
-    return !!room.sitting && room.seats.some((s) => !s || !s.socketId);
+    return !!room.sitting && room.seats.some((s) => !s || (!s.bot && !s.socketId));
   }
 
   private requireSeat(room: Room, socketId: string): Seat {
@@ -169,7 +246,7 @@ export class RoomManager {
     if (!room.sitting) throw new RuleError('The game has not started');
     if (this.paused(room)) throw new RuleError('Paused: waiting for all four players');
     room.sitting = fn(room.sitting, seat);
-    this.onChange(room);
+    this.changed(room);
   }
 
   /** A seated player renames their own team. */
@@ -180,7 +257,7 @@ export class RoomManager {
     const other = room.teamNames[1 - (seat % 2)];
     if (clean.toLowerCase() === other.toLowerCase()) throw new RuleError('The other team already has that name');
     room.teamNames[seat % 2] = clean;
-    this.onChange(room);
+    this.changed(room);
   }
 
   /** Lobby only: best of 7 (target 4) or no limit (null). */
@@ -189,7 +266,7 @@ export class RoomManager {
     if (room.sitting) throw new RuleError('The series length is set before the game starts');
     if (target !== null && target !== 4) throw new RuleError('Choose best of 7 or no limit');
     room.seriesTarget = target;
-    this.onChange(room);
+    this.changed(room);
   }
 
   newSeries(room: Room, socketId: string) { this.act(room, socketId, (s) => newSeries(s)); }
@@ -197,9 +274,9 @@ export class RoomManager {
   start(room: Room, socketId: string): void {
     this.requireSeat(room, socketId);
     if (room.sitting) throw new RuleError('Already started');
-    if (room.seats.some((s) => !s || !s.socketId)) throw new RuleError('Need four connected players');
+    if (room.seats.some((s) => !s || (!s.bot && !s.socketId))) throw new RuleError('Need four connected players');
     room.sitting = startHand(newSitting(this.rng, undefined, room.seriesTarget), this.rng); // toss happens here
-    this.onChange(room);
+    this.changed(room);
   }
 
   nextHand(room: Room, socketId: string) {
@@ -226,7 +303,7 @@ export class RoomManager {
       teamNames: room.teamNames,
       watchers: this.watchers(room),
       seats: room.seats.map((r) => r && {
-        name: r.name, connected: !!r.socketId, holdUntil: r.holdUntil, open: r.open,
+        name: r.name, connected: !!r.bot || !!r.socketId, holdUntil: r.holdUntil, open: r.open, bot: !!r.bot,
       }),
       started: !!s,
       paused: this.paused(room),
@@ -260,6 +337,7 @@ export class RoomManager {
     for (const [code, room] of this.rooms) {
       if (room.emptySince !== null && now - room.emptySince > maxIdleMs) {
         for (const t of room.timers.values()) clearTimeout(t);
+        if (room.botTimer) clearTimeout(room.botTimer);
         this.rooms.delete(code);
       }
     }

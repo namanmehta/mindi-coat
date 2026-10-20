@@ -15,7 +15,7 @@ client/     React app. Asks the server to act; never decides legality itself.
 
 * Rooms live in server memory. A restart or a free-tier sleep clears all tables.
 * A player is identified by a random token saved in their browser, so a refresh or a dropped connection puts them back in their seat with their hand.
-* Disconnect: the game pauses for 2 minutes. After that, anyone with the code can take the seat (and the hand). Nothing is ever auto-played.
+* Disconnect: the game pauses for 2 minutes. After that, anyone with the code can take the seat (and the hand), or a seated player can hand it to a bot.
 
 ## Playing on phones
 
@@ -23,6 +23,20 @@ The table is built for phones held sideways. For the most room, install it as an
 
 * **iPhone:** open the link in Safari, tap **Share**, then **Add to Home Screen**.
 * **Android:** open the link in Chrome and tap **Install app** (or use the full-screen button on the table).
+
+## Bots
+
+Short of players? Any seated player can tap **Add bot** on an empty seat. Bots play at one level (Hard):
+they imagine many possible ways the unseen cards could be dealt (consistent with everything played so far),
+play each one to the end with solid Mindi strategy, and pick the card that wins most often. They only use
+what a player in their seat could know; a test proves their decision doesn't change when hidden cards are reshuffled.
+
+Measure strength yourself (identical deals, seats swapped):
+
+```bash
+BUDGET=250 npx tsx scripts/tournament.ts 120 hard policy   # Hard vs strategy only
+npx tsx scripts/tournament.ts 200 policy random            # strategy vs random play
+```
 
 ## Run locally
 

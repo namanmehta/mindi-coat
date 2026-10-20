@@ -7,7 +7,9 @@ import type { RoomState } from './protocol';
 let server: Awaited<ReturnType<typeof startServer>>;
 const RECONNECT_MS = 400;
 
-beforeAll(async () => { server = await startServer(0, { reconnectMs: RECONNECT_MS }); });
+beforeAll(async () => {
+  server = await startServer(0, { reconnectMs: RECONNECT_MS, bot: { delayMs: 5, afterHandMs: 5, budgetMs: 5 } });
+});
 afterAll(async () => { await server.close(); });
 
 interface Client { s: Socket; token: string; name: string; last: RoomState | null }
@@ -268,6 +270,97 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     expect(cs[0].last!.view!.handNo).toBe(1);
     for (const c of cs) c.s.close();
   }, 120000);
+
+  /** Humans act only on their own turns; bots act on their own. Returns when the match ends. */
+  async function playWithBots(humans: (Client | null)[]) {
+    for (let guard = 0; guard < 400; guard++) {
+      await wait(40);
+      const anyone = humans.find(Boolean)!;
+      const v = anyone.last!.view!;
+      if (v.phase === 'done') return;
+      const seat = v.phase === 'playing' ? v.turn : v.chooser;
+      const h = humans[seat];
+      if (!h) continue; // a bot's decision
+      if (v.phase === 'choosing') { await emit(h, 'nameTrump', { suit: 'S' }); continue; }
+      if (v.phase === 'blind') { await emit(h, 'pickBlind', { index: 0 }); continue; }
+      const legal = h.last!.view!.legal;
+      if (legal.length) await emit(h, 'play', { card: legal[0] });
+    }
+    throw new Error('match did not finish');
+  }
+
+  it('bots: added only by seated players to empty seats, and they play a full match', async () => {
+    const names = ['Asha', 'Bilal', 'Chitra'];
+    const cs = await Promise.all(names.map((n) => client(n)));
+    const { code } = await emit(cs[0], 'create', { token: cs[0].token, name: 'Asha' });
+    for (let i = 1; i < 3; i++) await emit(cs[i], 'join', { code, token: cs[i].token, name: names[i] });
+    for (let i = 0; i < 3; i++) await emit(cs[i], 'sit', { seat: i, name: names[i] });
+    const spec = await client('Spec');
+    await emit(spec, 'join', { code, token: spec.token, name: 'Spec' });
+    expect((await emit(spec, 'addBot', { seat: 3 })).ok).toBe(false); // watchers can't add bots
+    expect((await emit(cs[1], 'addBot', { seat: 2 })).ok).toBe(false); // seat taken
+    expect((await emit(cs[0], 'start')).ok).toBe(false); // still three
+    expect((await emit(cs[1], 'addBot', { seat: 3 })).ok).toBe(true);
+    await settle();
+    const seat3 = cs[0].last!.seats[3]!;
+    expect(seat3.bot).toBe(true);
+    expect(seat3.connected).toBe(true);
+    expect(seat3.name).toMatch(/^Bot /);
+    expect(cs[2].last!.watchers).toEqual(['Spec']); // the bot is a player, not a watcher
+    expect((await emit(cs[0], 'start')).ok).toBe(true);
+    await playWithBots([cs[0], cs[1], cs[2], null]);
+    const st = cs[0].last!;
+    expect(st.results.length).toBe(1);
+    // a second match, in case the bot chooses trump this time
+    await emit(cs[0], 'nextHand');
+    await playWithBots([cs[0], cs[1], cs[2], null]);
+    expect(cs[0].last!.results.length).toBe(2);
+    for (const c of [...cs, spec]) c.s.close();
+  }, 60000);
+
+  it('bots: removed in the lobby; a person can take over a bot seat any time', async () => {
+    const cs = await Promise.all(['A', 'B'].map((n) => client(n)));
+    const { code } = await emit(cs[0], 'create', { token: cs[0].token, name: 'A' });
+    await emit(cs[0], 'sit', { seat: 0, name: 'A' });
+    await emit(cs[1], 'join', { code, token: cs[1].token, name: 'B' });
+    for (const seat of [1, 2, 3]) expect((await emit(cs[0], 'addBot', { seat })).ok).toBe(true);
+    await settle();
+    expect(new Set(cs[0].last!.seats.slice(1).map((s) => s!.name)).size).toBe(3); // distinct bot names
+    expect((await emit(cs[0], 'removeBot', { seat: 2 })).ok).toBe(true);
+    await settle();
+    expect(cs[0].last!.seats[2]).toBe(null);
+    await emit(cs[0], 'addBot', { seat: 2 });
+    await emit(cs[0], 'start');
+    await wait(150);
+    expect((await emit(cs[0], 'removeBot', { seat: 1 })).ok).toBe(false); // not mid-game
+    // B arrives late and takes a bot's seat, with its cards
+    expect((await emit(cs[1], 'sit', { seat: 1, name: 'B' })).ok).toBe(true);
+    await settle();
+    expect(cs[1].last!.you).toBe(1);
+    expect(cs[1].last!.seats[1]!.bot).toBe(false);
+    await playWithBots([cs[0], cs[1], null, null]);
+    expect(cs[0].last!.results.length).toBe(1);
+    for (const c of cs) c.s.close();
+  }, 60000);
+
+  it('bots: an abandoned seat can be given to a bot, and the game resumes', async () => {
+    const { cs, code } = await fullTable();
+    await emit(cs[0], 'start');
+    await settle();
+    expect((await emit(cs[0], 'addBot', { seat: 2 })).ok).toBe(false); // seat is occupied
+    cs[2].s.close();
+    await settle();
+    expect((await emit(cs[0], 'addBot', { seat: 2 })).ok).toBe(false); // still inside the reconnect window
+    await wait(RECONNECT_MS + 150);
+    expect(cs[0].last!.paused).toBe(true);
+    expect((await emit(cs[1], 'addBot', { seat: 2 })).ok).toBe(true);
+    await settle();
+    expect(cs[0].last!.paused).toBe(false);
+    await playWithBots([cs[0], cs[1], null, cs[3]]);
+    expect(cs[3].last!.results.length).toBe(1);
+    for (const c of cs) c.s.close();
+    void code;
+  }, 60000);
 
   it('bad room code is a clear error', async () => {
     const c = await client('Zed');

@@ -3,13 +3,13 @@ import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RoomManager, Room } from './rooms';
+import { RoomManager, Room, BotSettings } from './rooms';
 import { Ack } from './protocol';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const clientDir = path.resolve(here, '../dist');
 
-export function startServer(port: number, opts: { reconnectMs?: number } = {}) {
+export function startServer(port: number, opts: { reconnectMs?: number; bot?: BotSettings } = {}) {
 const app = express();
 const http = createServer(app);
 const io = new Server(http, { cors: { origin: process.env.CORS_ORIGIN || false } });
@@ -19,7 +19,7 @@ function broadcast(room: Room) {
     io.to(socketId).emit('state', rooms.stateFor(room, socketId));
   }
 }
-const rooms = new RoomManager(broadcast, Math.random, Date.now, opts.reconnectMs);
+const rooms = new RoomManager(broadcast, Math.random, Date.now, opts.reconnectMs, opts.bot);
 setInterval(() => rooms.sweep(30 * 60 * 1000), 60 * 1000).unref();
 
 app.get('/health', (_req, res) => { res.json({ ok: true, rooms: rooms.rooms.size }); });
@@ -62,6 +62,8 @@ io.on('connection', (socket) => {
   socket.on('setTeamName', handle((p: { name: string }) => rooms.setTeamName(room(), socket.id, p?.name)));
   socket.on('setSeries', handle((p: { target: number | null }) => rooms.setSeries(room(), socket.id, p?.target ?? null)));
   socket.on('newSeries', handle(() => rooms.newSeries(room(), socket.id)));
+  socket.on('addBot', handle((p: { seat: number }) => rooms.addBot(room(), socket.id, Number(p?.seat))));
+  socket.on('removeBot', handle((p: { seat: number }) => rooms.removeBot(room(), socket.id, Number(p?.seat))));
   socket.on('start', handle(() => rooms.start(room(), socket.id)));
   socket.on('nextHand', handle(() => rooms.nextHand(room(), socket.id)));
   socket.on('nameTrump', handle((p: { suit: any }) => rooms.nameTrump(room(), socket.id, p?.suit)));
