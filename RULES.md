@@ -17,8 +17,8 @@ This is the specification the game engine implements. If the code and this file 
 
 ## Start of a sitting
 
-* A toss picks the first trump chooser at random.
-* Dealing is automatic. The dealer seat is shown for flavor only and has no effect on play.
+* **The toss:** each player gets one face-up card, all of different ranks. The highest card picks trump first. Every seat is equally likely.
+* Dealing is automatic and shown on the table: cards fly from a deck to each seat, starting with the chooser.
 
 ## Each match
 
@@ -51,7 +51,8 @@ This is the specification the game engine implements. If the code and this file 
 * **Hand order:** cards are sorted ♥ ♠ ♦ ♣ so red and black alternate. If a suit is missing, the order is adjusted so colours still alternate where possible.
 
 * **Live, during a match:** hands won per team, and which of the four tens (by suit) each team has taken. Current trump, whose turn.
-* **After each hand:** the winning card is highlighted with "Name wins the hand", then the four cards slide toward the winner and the table clears.
+* **After each hand:** the winning card is highlighted with "Name wins the hand", then the four cards fly into the winning team's panel.
+* **MINDI:** when a hand captures a ten, a "MINDI!" banner shows which team took which ten.
 * **Series:** matches won per team, first to 4. When a team reaches 4 it wins the series; a new series starts the count at 0. Series won are tallied. With "no limit", matches are just counted.
 * **Team names:** each team names itself (up to 20 characters, must differ from the other team).
 * **Results table:** one row per match: series, match number, chooser, trump suit, blind or named, winning team, tens per team, hands per team, whether it ended early.

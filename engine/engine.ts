@@ -71,6 +71,8 @@ export interface Sitting {
   seriesWon: [number, number];
   /** set when a team reaches the target; cleared by newSeries */
   seriesWinner: Team | null;
+  /** the opening toss: one face-up card per seat, all different ranks; the highest picks trump first */
+  toss: Card[] | null;
 }
 
 export type Rng = () => number;
@@ -91,12 +93,30 @@ export function shuffle<T>(arr: T[], rng: Rng): T[] {
 }
 
 /** Start a sitting. The toss picks the first chooser at random. */
+/** Four face-up cards of different ranks; the seat with the highest picks trump first. Every seat is equally likely. */
+export function tossCards(rng: Rng): Card[] {
+  const ranks: number[] = [];
+  while (ranks.length < 4) {
+    const r = 2 + Math.floor(rng() * 13);
+    if (!ranks.includes(r)) ranks.push(r);
+  }
+  return ranks.map((r) => ({ r, s: SUITS[Math.floor(rng() * 4)] }));
+}
+
 export function newSitting(rng: Rng, firstChooser?: Seat, target: number | null = null): Sitting {
-  const chooser = firstChooser ?? (Math.floor(rng() * 4) as Seat);
   if (target !== null && (!Number.isInteger(target) || target < 1)) throw new RuleError('Invalid series length');
+  let toss: Card[] | null = null;
+  let chooser: Seat;
+  if (firstChooser !== undefined) chooser = firstChooser;
+  else {
+    toss = tossCards(rng);
+    let best = 0;
+    toss.forEach((c, i) => { if (c.r > toss![best].r) best = i; });
+    chooser = best as Seat;
+  }
   return {
     nextChooser: chooser, handsWon: [0, 0], results: [], hand: null,
-    target, seriesNo: 1, seriesWon: [0, 0], seriesWinner: null,
+    target, seriesNo: 1, seriesWon: [0, 0], seriesWinner: null, toss,
   };
 }
 

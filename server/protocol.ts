@@ -1,5 +1,5 @@
 // Shared message shapes between server and client.
-import type { PlayerView, ResultRow, Seat } from '../engine/engine';
+import type { Card, PlayerView, ResultRow, Seat } from '../engine/engine';
 
 export interface SeatInfo {
   name: string;
@@ -27,6 +27,8 @@ export interface RoomState {
   seriesWon: [number, number];
   seriesWinner: 0 | 1 | null;
   results: ResultRow[];
+  /** opening toss, one card per seat; null if none */
+  toss: Card[] | null;
   you: Seat | null;
   view: PlayerView | null;
 }

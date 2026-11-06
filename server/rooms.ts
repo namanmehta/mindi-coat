@@ -22,6 +22,12 @@ export interface BotSettings {
   afterHandMs: number;
   /** thinking time per move (ms) */
   budgetMs: number;
+  /** the opening toss animation (ms) */
+  tossMs: number;
+  /** a deal animation (ms) */
+  dealMs: number;
+  /** extra hold when a ten is captured (ms) */
+  mindiMs: number;
 }
 const BOT_NAMES = ['Bot Raja', 'Bot Rani', 'Bot Mantri', 'Bot Sipahi'];
 
@@ -50,7 +56,7 @@ export class RoomManager {
     private rng: () => number = Math.random,
     private now: () => number = Date.now,
     private reconnectMs = RECONNECT_MS,
-    private botSettings: BotSettings = { delayMs: 900, afterHandMs: 1900, budgetMs: 250 },
+    private botSettings: BotSettings = { delayMs: 900, afterHandMs: 1900, budgetMs: 250, tossMs: 2900, dealMs: 2300, mindiMs: 700 },
   ) {}
 
   /** Every state change goes through here: tell everyone, then let a bot move if it's a bot's turn. */
@@ -171,7 +177,14 @@ export class RoomManager {
     if (who === null) return;
     const h = room.sitting!.hand!;
     const justWon = h.phase === 'playing' && h.trick.length === 0 && h.history.length > 0;
-    const delay = this.botSettings.delayMs + (justWon ? this.botSettings.afterHandMs : 0);
+    const lastHadTen = justWon && h.history[h.history.length - 1].plays.some((p) => p.card.r === 10);
+    const firstOfSitting = room.sitting!.results.length === 0 && room.sitting!.seriesNo === 1;
+    // give people time to watch the toss and the deals before a bot moves
+    let extra = 0;
+    if (h.phase === 'choosing') extra = this.botSettings.dealMs * (firstOfSitting ? 1.6 : 1) + (firstOfSitting && room.sitting!.toss ? this.botSettings.tossMs : 0);
+    else if (h.phase === 'playing' && h.history.length === 0 && h.trick.length === 0) extra = this.botSettings.dealMs;
+    else if (justWon) extra = this.botSettings.afterHandMs + (lastHadTen ? this.botSettings.mindiMs : 0);
+    const delay = this.botSettings.delayMs + extra;
     room.botTimer = setTimeout(() => {
       room.botTimer = null;
       if (this.botToAct(room) !== who) { this.scheduleBot(room); return; }
@@ -314,6 +327,7 @@ export class RoomManager {
       seriesWon: s ? s.seriesWon : [0, 0],
       seriesWinner: s ? s.seriesWinner : null,
       results: s ? s.results : [],
+      toss: s ? s.toss : null,
       you,
       view: s && s.hand ? viewFor(s.hand, you) : null,
     };

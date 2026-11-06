@@ -290,6 +290,20 @@ describe('fuzz: random full hands', () => {
     expect(s.seriesWinner).toBe(null);
   });
 
+  it('toss: four different ranks, highest picks trump first, every seat equally likely', () => {
+    const rng = mulberry32(77);
+    const firsts = [0, 0, 0, 0];
+    for (let i = 0; i < 8000; i++) {
+      const s = newSitting(rng);
+      const t = s.toss!;
+      expect(new Set(t.map((c) => c.r)).size).toBe(4);
+      const hi = Math.max(...t.map((c) => c.r));
+      expect(t[s.nextChooser].r).toBe(hi);
+      firsts[s.nextChooser]++;
+    }
+    for (const n of firsts) expect(Math.abs(n / 8000 - 0.25)).toBeLessThan(0.02);
+  });
+
   it('cannot start a new hand while one is in progress', () => {
     const rng = mulberry32(7);
     const s = startHand(newSitting(rng), rng);

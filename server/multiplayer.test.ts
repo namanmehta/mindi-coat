@@ -8,7 +8,7 @@ let server: Awaited<ReturnType<typeof startServer>>;
 const RECONNECT_MS = 400;
 
 beforeAll(async () => {
-  server = await startServer(0, { reconnectMs: RECONNECT_MS, bot: { delayMs: 5, afterHandMs: 5, budgetMs: 5 } });
+  server = await startServer(0, { reconnectMs: RECONNECT_MS, bot: { delayMs: 5, afterHandMs: 5, budgetMs: 5, tossMs: 5, dealMs: 5, mindiMs: 5 } });
 });
 afterAll(async () => { await server.close(); });
 
@@ -83,7 +83,7 @@ describe('multiplayer table', { timeout: 30000 }, () => {
       const v = cs[i].last!.view!;
       // only the chooser receives cards while trump is chosen; nothing to peek at in the payload
       expect(v.myHand.length).toBe(i === chooser ? 5 : 0);
-      if (i !== chooser) expect(JSON.stringify(cs[i].last).match(/"s":"[SHDC]"/g) ?? []).toEqual([]);
+      if (i !== chooser) expect(JSON.stringify({ ...cs[i].last, toss: null }).match(/"s":"[SHDC]"/g) ?? []).toEqual([]);
       expect(cs[i].last!.you).toBe(i);
     }
     // everyone at the table sees who is watching
@@ -91,9 +91,13 @@ describe('multiplayer table', { timeout: 30000 }, () => {
     expect(cs[3].last!.watchers).toEqual(['Eve']);
     // spectator sees no cards, and nobody's payload contains another hand
     expect(extra.last!.view!.myHand).toEqual([]);
-    const leaked = JSON.stringify(cs[chooser].last).match(/"s":"[SHDC]"/g) ?? [];
+    const leaked = JSON.stringify({ ...cs[chooser].last, toss: null }).match(/"s":"[SHDC]"/g) ?? [];
     expect(leaked.length).toBe(5); // the chooser's payload holds exactly their own 5 cards
 
+    // the toss is public: four face-up cards, and the highest belongs to the chooser
+    const toss = cs[2].last!.toss!;
+    expect(toss.length).toBe(4);
+    expect(toss[chooser].r).toBe(Math.max(...toss.map((c) => c.r)));
     // wrong player cannot choose trump
     const wrong = cs[(chooser + 1) % 4];
     expect((await emit(wrong, 'nameTrump', { suit: 'S' })).ok).toBe(false);

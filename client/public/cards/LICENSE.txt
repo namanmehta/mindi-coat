@@ -1,0 +1,4 @@
+Court card artwork (J, Q, K) is from Adrian Kennard's playing card designs
+(https://www.me.uk/cards/), as packaged in @letele/playing-cards, released
+under CC0 1.0 Universal (public domain dedication). Cropped to the portrait
+frame for use in Mindi Coat.

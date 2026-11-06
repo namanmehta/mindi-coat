@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { Card, Seat, Suit, Play } from '../engine/engine';
 import type { RoomState } from '../server/protocol';
 import { SUIT_ORDER, sortHand } from '../engine/order';
+import { T, EASE, run, center, flyIn, flipUp, slide, reducedMotion } from './motion';
 
 // ---------- words and small helpers ----------
 
@@ -30,7 +31,6 @@ function getToken(): string {
   return t;
 }
 
-const reducedMotion = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** Short vibration. Android only: iPhone does not allow vibration from websites. */
 function buzz(pattern: number | number[]) {
   try { if (!reducedMotion()) navigator.vibrate?.(pattern); } catch { /* unsupported */ }
@@ -56,22 +56,25 @@ function useSocket() {
 
 // ---------- pieces ----------
 
-function CardFace({ card, onClick, disabled, highlight, trump, className, style }: {
-  card: Card; onClick?: () => void; disabled?: boolean; highlight?: boolean; trump?: boolean;
-  className?: string; style?: React.CSSProperties;
+/** A playing card: big corner rank and suit, court art on J/Q/K, a centred pip on aces. */
+function CardFace({ card, onClick, disabled, highlight, trump, className, style, down, elRef, label }: {
+  card: Card | null; onClick?: () => void; disabled?: boolean; highlight?: boolean; trump?: boolean;
+  className?: string; style?: React.CSSProperties; down?: boolean; elRef?: (el: HTMLElement | null) => void; label?: string;
 }) {
-  const cls = ['card', isRed(card.s) ? 'red' : '', card.r === 10 ? 'ten' : '', highlight ? 'win' : '',
-    trump ? 'trumpc' : '', onClick ? 'playable' : '', disabled ? 'dim' : '', className ?? ''].filter(Boolean).join(' ');
-  const label = `${rankLabel(card.r)} of ${SUIT_NAME[card.s]}`;
-  const inner = (
-    <>
+  const cls = ['card', highlight ? 'win' : '', onClick ? 'playable' : '', disabled ? 'dim' : '', className ?? ''].filter(Boolean).join(' ');
+  const face = card && (
+    <div className={['face', isRed(card.s) ? 'red' : '', card.r === 10 ? 'ten' : '', trump ? 'trumpc' : ''].filter(Boolean).join(' ')}>
       <span className="r">{rankLabel(card.r)}</span>
       <span className="s">{SUIT_SYMBOL[card.s]}</span>
-      <span className="big">{SUIT_SYMBOL[card.s]}</span>
-    </>
+      {card.r >= 11 && card.r <= 13
+        ? <img className="court" src={`/cards/${card.s}${rankLabel(card.r)}.svg`} alt="" draggable={false} />
+        : card.r === 14 ? <span className="ace">{SUIT_SYMBOL[card.s]}</span> : <span className="big">{SUIT_SYMBOL[card.s]}</span>}
+    </div>
   );
-  if (onClick) return <button className={cls} style={style} onClick={onClick} disabled={disabled} aria-label={label}>{inner}</button>;
-  return <div className={cls} style={style} aria-label={label}>{inner}</div>;
+  const inner = <div className={`flip ${down || !card ? 'down' : ''}`}>{face}<div className="cback" /></div>;
+  const aria = label ?? (card ? `${rankLabel(card.r)} of ${SUIT_NAME[card.s]}` : 'Face-down card');
+  if (onClick) return <button ref={elRef as any} className={cls} style={style} onClick={onClick} disabled={disabled} aria-label={aria}>{inner}</button>;
+  return <div ref={elRef as any} className={cls} style={style} aria-label={aria}>{inner}</div>;
 }
 
 /** A number that rolls up when it changes instead of jumping. */
@@ -170,10 +173,8 @@ function Entry({ onCreate, onJoin, error }: {
 // ---------- the table ----------
 
 type Pos = 'bottom' | 'right' | 'top' | 'left';
-
-// Played-card centres on the felt, and where they fly when a hand is won (units of --u from table centre).
-const CARD_CENTER: Record<Pos, [number, number]> = { bottom: [0, 7.8], top: [0, -6.7], left: [-15.8, 0], right: [15.8, 0] };
-const SEAT_CENTER: Record<Pos, [number, number]> = { bottom: [0, 42], top: [0, -23.5], left: [-57, -2], right: [57, -2] };
+/** Resting tilt of a card played from each side (must match the stylesheet). */
+const ROT: Record<Pos, number> = { bottom: 2, top: -3, left: -8, right: 7 };
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -191,9 +192,11 @@ function useNow(active: boolean) {
   return now;
 }
 
-/** When a hand completes: hold the four cards with the winner lit, then sweep them to the winner. */
+type Sweep = { key: string; plays: Play[]; winner: Seat; flying: boolean; tens: Suit[] };
+
+/** When a hand completes: hold the four cards (winner lit, MINDI if a ten fell), then sweep them to the winners' panel. */
 function useSweep(view: RoomState['view']) {
-  const [sweep, setSweep] = useState<{ key: string; plays: Play[]; winner: Seat; flying: boolean } | null>(null);
+  const [sweep, setSweep] = useState<Sweep | null>(null);
   const prev = useRef<{ handNo: number; done: number } | null>(null);
   const done = view ? view.tricks[0] + view.tricks[1] : 0;
   useEffect(() => {
@@ -202,25 +205,26 @@ function useSweep(view: RoomState['view']) {
     prev.current = { handNo: view.handNo, done };
     if (p && p.handNo === view.handNo && done === p.done + 1 && view.lastTrick) {
       const key = `${view.handNo}-${done}`;
-      const hold = reducedMotion() ? 1400 : 1100;
-      setSweep({ key, plays: view.lastTrick.plays, winner: view.lastTrick.winner, flying: false });
+      const tens = view.lastTrick.plays.filter((x) => x.card.r === 10).map((x) => x.card.s);
+      const hold = tens.length ? T.holdMindi : T.hold;
+      setSweep({ key, plays: view.lastTrick.plays, winner: view.lastTrick.winner, flying: false, tens });
       setTimeout(() => setSweep((s) => (s && s.key === key ? { ...s, flying: true } : s)), hold);
-      setTimeout(() => setSweep((s) => (s && s.key === key ? null : s)), hold + 600);
+      setTimeout(() => setSweep((s) => (s && s.key === key ? null : s)), hold + T.sweep);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view?.handNo, done]);
   return sweep && view && view.trick.length === 0 ? sweep : null;
 }
 
-function TeamPanel({ team, name, hands, tens, mine, side, celebrate, onRename }: {
+function TeamPanel({ team, name, hands, tens, mine, side, celebrate, onRename, elRef }: {
   team: 0 | 1; name: string; hands: number; tens: Suit[]; mine: boolean; side: 'left' | 'right';
-  celebrate: boolean; onRename: (name: string) => void;
+  celebrate: boolean; onRename: (name: string) => void; elRef?: (el: HTMLElement | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   const save = () => { const n = draft.trim(); if (n && n !== name) onRename(n); setEditing(false); };
   return (
-    <section className={`team glass ${side} t${team} ${celebrate ? 'celebrate' : ''}`} aria-label={`${name} score`}>
+    <section ref={elRef as any} className={`team glass ${side} t${team} ${celebrate ? 'celebrate' : ''}`} aria-label={`${name} score`}>
       <div className="thead">
         {editing ? (
           <form className="rename" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -280,6 +284,22 @@ function Confetti() {
   );
 }
 
+/** A deal in progress: when it starts, how fast, how many cards each, whether the toss comes first. */
+interface Deal {
+  id: string;
+  kind: 'five' | 'eight';
+  tossUntil: number;
+  start: number;
+  gap: number;
+  n: number;
+  chooser: Seat;
+  end: number;
+  /** a non-chooser's face-down five: show 13 backs while dealing, then flip them all */
+  reveal: boolean;
+}
+
+const cardKey = (c: Card) => `${c.r}${c.s}`;
+
 function Table({ state, send, name, onLeave, flash }: {
   state: RoomState; send: (ev: string, payload?: any) => void; name: string; onLeave?: () => void; flash: (m: string) => void;
 }) {
@@ -295,21 +315,151 @@ function Table({ state, send, name, onLeave, flash }: {
   const [showResults, setShowResults] = useState(false);
   const [portraitOk, setPortraitOk] = useState(false);
   const [fsAvailable] = useState(() => !!document.fullscreenEnabled && !isInstalled());
+  const [, rerender] = useState(0);
 
   const seatName = (seat: number) => seats[seat]?.name ?? 'Open seat';
-  const myTurn = !!view && view.phase === 'playing' && view.turn === you && !state.paused;
-  const isLegal = (c: Card) => !!view?.legal.some((x) => same(x, c));
   const iChoose = !!view && view.chooser === you;
   const choosing = !!view && (view.phase === 'choosing' || view.phase === 'blind');
   const seated = seats.filter(Boolean).length;
   const target = state.seriesTarget;
 
+  // ---------- deals and the toss: detected from state changes, then played out on screen ----------
+  const matchId = view ? `${state.seriesNo}-${view.handNo}` : 'none';
+  const phase = view?.phase ?? 'none';
+  const seenRef = useRef<{ id: string; phase: string } | null>(null);
+  const dealRef = useRef<Deal | null>(null);
+  const backsShown = useRef(0);
+  const tossSeen = useRef(false);
+  {
+    const prev = seenRef.current;
+    if (!prev || prev.id !== matchId || prev.phase !== phase) {
+      const t0 = performance.now();
+      const firstOfSitting = state.results.length === 0 && state.seriesNo === 1 && view?.handNo === 1;
+      if (prev && view && prev.id !== matchId && phase === 'choosing') {
+        const withToss = firstOfSitting && !!state.toss && !tossSeen.current && !reducedMotion();
+        tossSeen.current = true;
+        const start = t0 + (withToss ? T.toss : 0);
+        const gap = firstOfSitting ? T.gapFirst : T.gap;
+        dealRef.current = { id: matchId, kind: 'five', tossUntil: withToss ? start : 0, start, gap, n: 5, chooser: view.chooser, end: start + 20 * gap + T.fly + T.flip, reveal: false };
+      } else if (prev && view && prev.id === matchId && (prev.phase === 'choosing' || prev.phase === 'blind') && phase === 'playing') {
+        const gap = firstOfSitting ? T.gap8First : T.gap8;
+        const start = Math.max(t0, dealRef.current?.end ?? 0);
+        dealRef.current = { id: matchId, kind: 'eight', tossUntil: 0, start, gap, n: 8, chooser: view.chooser, end: start + 32 * gap + T.fly + T.flip, reveal: backsShown.current > 0 };
+      }
+      if (prev && prev.id === 'none' && view) tossSeen.current = true;
+      seenRef.current = { id: matchId, phase };
+    }
+  }
+  const deal = dealRef.current && dealRef.current.id === matchId ? dealRef.current : null;
+  const tNow = performance.now();
+  const tossing = !!deal && tNow < deal.tossUntil;
+  const dealing = !!deal && tNow < deal.end;
+  // re-render at the moments the picture changes (toss over, deal over)
+  useEffect(() => {
+    if (!deal) return;
+    const marks = [deal.tossUntil, deal.end].map((t) => t - performance.now()).filter((d) => d > 0);
+    const ids = marks.map((d) => setTimeout(() => rerender((x) => x + 1), d + 20));
+    return () => ids.forEach(clearTimeout);
+  }, [deal?.id, deal?.kind]);
+
+  const myTurn = !!view && view.phase === 'playing' && view.turn === you && !state.paused && !dealing;
+  const isLegal = (c: Card) => !!view?.legal.some((x) => same(x, c));
+
   const hand = useMemo(() => (view ? sortHand(view.myHand) : []), [view]);
+  const handCount = you !== null && view ? view.handCounts[you] : 0;
+  // what your hand row shows right now
+  const showBacks: number = you === null || !view ? 0 : hand.length === 0 ? handCount : deal?.reveal && dealing ? handCount : 0;
+  backsShown.current = showBacks || 0;
   const suitStarts = useMemo(() => new Set(hand.map((c, i) => (i > 0 && hand[i - 1].s !== c.s ? i : -1))), [hand]);
 
-  // Feedback scales with rarity: turn (tiny), match (medium), series (biggest).
+  // ---------- element registries for measuring ----------
+  const handEls = useRef(new Map<string, HTMLElement>());
+  const trickEls = useRef(new Map<string, HTMLElement>());
+  const seatEls = useRef(new Map<number, HTMLElement>());
+  const panelEls = useRef<{ left: HTMLElement | null; right: HTMLElement | null }>({ left: null, right: null });
+  const deckEl = useRef<HTMLElement | null>(null);
+  const handRowEl = useRef<HTMLElement | null>(null);
+  const lastHandRects = useRef(new Map<string, DOMRect>());
+  const landed = useRef(new Set<string>());
+  const flippedReveal = useRef('');
+
+  const deckRect = (): DOMRect | null => deckEl.current?.getBoundingClientRect() ?? null;
+  const seatRect = (seat: number): DOMRect | null => {
+    if (seat === you) return handRowEl.current?.getBoundingClientRect() ?? null;
+    return seatEls.current.get(seat)?.querySelector('.av')?.getBoundingClientRect() ?? null;
+  };
+  /** when the m-th card of this deal reaches `seat` */
+  const dealDelay = (d: Deal, seat: number, m: number) => d.start + (m * 4 + ((seat - d.chooser + 4) % 4)) * d.gap - performance.now();
+
+  useLayoutEffect(() => {
+    // 1. cards arriving on the table: from your hand, or from the player's seat (turning face up on the way)
+    for (const [key, el] of trickEls.current) {
+      if (landed.current.has(key)) continue;
+      landed.current.add(key);
+      const play = view?.trick.find((p) => cardKey(p.card) === key);
+      if (!play) continue;
+      const pos = posOf(play.seat);
+      const fromHand = play.seat === you ? lastHandRects.current.get(key) : null;
+      const from = fromHand ?? seatRect(play.seat);
+      if (from) flyIn(el, from, { rot: ROT[pos], duration: T.land, flip: !fromHand, fromRot: fromHand ? 0 : ROT[pos] * 4 });
+    }
+    // 2. your hand: dealt cards fly in from the deck; cards that moved slide; a hidden hand flips over
+    const rects = new Map<string, DOMRect>();
+    const fresh: [string, HTMLElement][] = [];
+    for (const [key, el] of handEls.current) {
+      const r = el.getBoundingClientRect();
+      rects.set(key, r);
+      const prev = lastHandRects.current.get(key);
+      if (prev) slide(el, prev);
+      else fresh.push([key, el]);
+    }
+    const d = dealRef.current;
+    const faces = fresh.filter(([k]) => !k.startsWith('back'));
+    const revealing = d && d.reveal && d.id === matchId && !dealing && flippedReveal.current !== d.id && faces.length === hand.length && hand.length > 0;
+    if (revealing) {
+      flippedReveal.current = d!.id;
+      faces.forEach(([, el], i) => flipUp(el, i * 40, T.flip));
+    } else if (d && d.id === matchId && dealing && you !== null && lastHandRects.current.size + fresh.length > 0) {
+      const from = deckRect();
+      const firstNew = d.n === 8 && !d.reveal ? 0 : d.n === 8 ? 5 : 0;
+      fresh
+        .filter(([k]) => !k.startsWith('back') || Number(k.slice(5)) >= firstNew)
+        .sort((x, y) => x[1].getBoundingClientRect().left - y[1].getBoundingClientRect().left)
+        .forEach(([k, el], m) => {
+          if (from) flyIn(el, from, { delay: dealDelay(d, you, m), flip: !k.startsWith('back'), fromRot: 0 });
+        });
+    }
+    lastHandRects.current = rects;
+  });
+
+  // a new match starts with an empty table
+  useEffect(() => { landed.current = new Set(); }, [matchId]);
+
+  // 3. the won hand sweeps into the winning team's panel
+  useEffect(() => {
+    if (!sweep?.flying) return;
+    const team = sweep.winner % 2;
+    const panel = team === myTeam ? panelEls.current.left : panelEls.current.right;
+    const tr = panel?.querySelector('.tens')?.getBoundingClientRect() ?? panel?.getBoundingClientRect();
+    if (!tr) return;
+    const [tx, ty] = center(tr);
+    sweep.plays.forEach((p, i) => {
+      const el = trickEls.current.get(cardKey(p.card));
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const [cx, cy] = center(r);
+      const rot = ROT[posOf(p.seat)];
+      run(el, [{ transform: `rotate(${rot}deg)`, opacity: 1 },
+        { transform: `translate(${tx - cx}px, ${ty - cy}px) rotate(${rot - 25}deg) scale(.24)`, opacity: 0.9, offset: 0.88 },
+        { transform: `translate(${tx - cx}px, ${ty - cy}px) rotate(${rot - 25}deg) scale(.2)`, opacity: 0 }],
+      { duration: T.sweep - 40, delay: i * 35, easing: 'cubic-bezier(.5,0,.3,1)' });
+    });
+  }, [sweep?.flying]);
+
+  // Feedback scales with rarity: turn (tiny), MINDI (medium), match, series (biggest).
   const turnRef = useRef(false);
   useEffect(() => { if (myTurn && !turnRef.current) buzz(18); turnRef.current = myTurn; }, [myTurn]);
+  useEffect(() => { if (sweep && !sweep.flying && sweep.tens.length) buzz([25, 50, 25]); }, [sweep?.key]);
   const matchKey = view?.phase === 'done' ? `${state.seriesNo}-${view.handNo}` : '';
   const seenMatch = useRef('');
   useEffect(() => {
@@ -355,20 +505,49 @@ function Table({ state, send, name, onLeave, flash }: {
     return out;
   };
   const hasBots = seats.some((s) => s?.bot);
-  const tensOf = (t: number) => (view?.tensTaken ?? []).filter((x) => x.team === t).map((x) => x.suit);
 
-  const onFelt: { plays: Play[]; winner?: Seat; flying: boolean } =
-    view && view.trick.length ? { plays: view.trick, flying: false }
-      : sweep ? { plays: sweep.plays, winner: sweep.winner, flying: sweep.flying }
-        : { plays: [], flying: false };
-  const flyStyle = (from: Pos, to: Pos): React.CSSProperties => {
-    const [cx, cy] = CARD_CENTER[from], [tx, ty] = SEAT_CENTER[to];
-    return { transform: `translate(calc(var(--u) * ${tx - cx}), calc(var(--u) * ${ty - cy})) scale(0.3)`, opacity: 0 };
+  // panels show a won hand only once its cards have landed there
+  const pendingTeam = sweep ? sweep.winner % 2 : -1;
+  const tensOf = (t: number) => (view?.tensTaken ?? [])
+    .filter((x) => x.team === t && !(t === pendingTeam && sweep!.tens.includes(x.suit)))
+    .map((x) => x.suit);
+  const handsOf = (t: number) => (view?.tricks[t] ?? 0) - (t === pendingTeam ? 1 : 0);
+
+  const onFelt: { plays: Play[]; winner?: Seat } =
+    view && view.trick.length ? { plays: view.trick } : sweep ? { plays: sweep.plays, winner: sweep.winner } : { plays: [] };
+
+  const matchDone = view?.phase === 'done' && !!view.result && !sweep;
+  const seriesOver = state.seriesWinner !== null && matchDone;
+  const mindi = sweep && !sweep.flying && sweep.tens.length > 0 ? sweep : null;
+  const mindiTeam = mindi ? teamName(mindi.winner % 2) : '';
+
+  // others' cards in a deal: backs flying from the deck to each seat
+  const flights: { id: string; seat: number; m: number }[] = [];
+  if (deal && dealing && !tossing) {
+    for (const seat of [0, 1, 2, 3]) {
+      if (seat === you) continue;
+      for (let m = 0; m < deal.n; m++) flights.push({ id: `${deal.id}-${deal.kind}-${seat}-${m}`, seat, m });
+    }
+  }
+  const flightRef = (seat: number, m: number) => (el: HTMLElement | null) => {
+    if (!el || el.dataset.go || !deal) return;
+    el.dataset.go = '1';
+    const to = seatRect(seat), from = deckRect();
+    if (!to || !from) { el.style.display = 'none'; return; }
+    const [fx, fy] = center(from), [tx, ty] = center(to);
+    const r = el.getBoundingClientRect();
+    const [cx, cy] = center(r);
+    const rot = { top: 180, left: 90, right: -90, bottom: 0 }[posOf(seat)];
+    run(el, [
+      { transform: `translate(${fx - cx}px, ${fy - cy}px)`, opacity: 0, offset: 0 },
+      { transform: `translate(${fx - cx}px, ${fy - cy}px)`, opacity: 1, offset: 0.01 },
+      { transform: `translate(${tx - cx}px, ${ty - cy}px) rotate(${rot}deg) scale(.42)`, opacity: 1, offset: 0.85 },
+      { transform: `translate(${tx - cx}px, ${ty - cy}px) rotate(${rot}deg) scale(.36)`, opacity: 0 },
+    ], { duration: T.fly + 40, delay: Math.max(0, dealDelay(deal, seat, m)), easing: EASE });
   };
 
-  const matchDone = view?.phase === 'done' && !!view.result && !(sweep && !sweep.flying);
-  const seriesOver = state.seriesWinner !== null && matchDone;
-  const handCount = you !== null && view ? view.handCounts[you] : 0;
+  const showChooseUI = !tossing && !(deal?.kind === 'five' && dealing);
+  const showCounts = !dealing;
 
   return (
     <div className={`board ${portraitOk ? 'portrait-ok' : ''}`}>
@@ -412,11 +591,12 @@ function Table({ state, send, name, onLeave, flash }: {
         const pos = posOf(seat);
         if (pos === 'bottom' && you !== null) return null;
         const s = seats[seat];
-        const turn = view?.phase === 'playing' && view.turn === seat && !state.paused;
-        const isChooser = state.started && !!view && view.chooser === seat;
+        const turn = view?.phase === 'playing' && view.turn === seat && !state.paused && !dealing;
+        const isChooser = state.started && !!view && view.chooser === seat && !tossing;
         const count = view ? view.handCounts[seat] : 0;
         return (
-          <div key={seat} className={`seat s-${pos} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
+          <div key={seat} ref={(el) => { if (el) seatEls.current.set(seat, el); else seatEls.current.delete(seat); }}
+            className={`seat s-${pos} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
             <div className="av" aria-hidden="true">
               {isChooser && <Crown />}
               {s ? (s.bot ? <span className="bot-face"><Robot /></span> : initials(s.name)) : '+'}
@@ -424,7 +604,7 @@ function Table({ state, send, name, onLeave, flash }: {
             <div className="name">
               <span className="nm">{seatName(seat)}</span>
               {s && !s.connected ? <span className="cnt">{s.open ? 'Left' : 'Reconnecting'}</span>
-                : count > 0 && <span className="cnt">{plural(count, 'card')}</span>}
+                : count > 0 && showCounts && <span className="cnt">{plural(count, 'card')}</span>}
             </div>
             {seatActions(seat).length > 0 && (
               <div className="seat-actions">
@@ -437,18 +617,47 @@ function Table({ state, send, name, onLeave, flash }: {
         );
       })}
 
+      {/* the deck sits in the middle of the table while dealing */}
+      <div className="trick" aria-hidden="true">
+        <div ref={(el) => { deckEl.current = el; }} className={`deck ${dealing && !tossing ? 'on' : ''}`}>
+          {[0, 1, 2].map((i) => <CardFace key={i} card={null} className="deck-card" style={{ ['--i' as any]: i }} />)}
+        </div>
+      </div>
+
       <div className={`trick ${onFelt.winner !== undefined ? 'decided' : ''}`} aria-label="Cards on the table">
         {onFelt.plays.map((p) => {
-          const pos = posOf(p.seat);
+          const key = cardKey(p.card);
           return (
-            <CardFace key={`${p.card.r}${p.card.s}`} card={p.card} className={`p-${pos} ${onFelt.flying ? 'flying' : ''}`}
-              highlight={onFelt.winner === p.seat}
-              style={onFelt.flying && onFelt.winner !== undefined ? flyStyle(pos, posOf(onFelt.winner)) : undefined} />
+            <CardFace key={key} card={p.card} className={`p-${posOf(p.seat)}`} highlight={onFelt.winner === p.seat}
+              elRef={(el) => { if (el) trickEls.current.set(key, el); else trickEls.current.delete(key); }} />
           );
         })}
       </div>
+
+      {/* the toss: one face-up card each, the highest picks trump first */}
+      {tossing && state.toss && view && (
+        <div className="trick toss" aria-label="Toss">
+          {state.toss.map((c, seat) => (
+            <CardFace key={seat} card={c} className={`toss-card at-${posOf(seat)} ${seat === view.chooser ? 'winner' : ''}`}
+              style={{ ['--k' as any]: seat }} />
+          ))}
+          <div className="toss-msg glass capsule">{seat0Name(view.chooser)} {view.chooser === you ? 'choose' : 'chooses'} trump first</div>
+        </div>
+      )}
+
+      <div className="fx" aria-hidden="true">
+        {flights.map((f) => <CardFace key={f.id} card={null} className="flight" elRef={flightRef(f.seat, f.m)} />)}
+      </div>
+
       {sweep && !sweep.flying && (
         <div className="won-tag glass capsule" role="status">{sweep.winner === you ? 'You win' : `${seatName(sweep.winner)} wins`} the hand</div>
+      )}
+      {mindi && (
+        <div className="mindi" role="status" aria-label={`Mindi! ${mindiTeam} take the ten`}>
+          <div className="rays" />
+          <div className="mindi-word">{mindi.tens.length > 1 ? 'DOUBLE MINDI!' : 'MINDI!'}</div>
+          <div className="mindi-sub">{mindiTeam} take the {mindi.tens.map((t) => `10${SUIT_SYMBOL[t]}`).join(' and ')}</div>
+        </div>
       )}
 
       {/* lobby */}
@@ -478,13 +687,13 @@ function Table({ state, send, name, onLeave, flash }: {
         </div>
       )}
 
-      {view && choosing && !iChoose && (
+      {view && choosing && !iChoose && showChooseUI && (
         <div className="status glass capsule" role="status">
           {seatName(view.chooser)} is choosing trump{view.phase === 'blind' ? ' blind' : ''}
           <span className="dots" aria-hidden="true"><i /><i /><i /></span>
         </div>
       )}
-      {view && iChoose && view.phase === 'choosing' && (
+      {view && iChoose && view.phase === 'choosing' && showChooseUI && (
         <div className="panel picker glass">
           <h2>Choose trump</h2>
           <p className="muted">From your five cards, or pick blind</p>
@@ -503,8 +712,10 @@ function Table({ state, send, name, onLeave, flash }: {
           <p className="muted">Its suit becomes trump</p>
           <div className="blind-row">
             {Array.from({ length: view.blindSlots }).map((_, i) => (
-              <button key={i} className="card back" disabled={state.paused}
-                onClick={() => send('pickBlind', { index: i })} aria-label={`Hidden card ${i + 1}`} />
+              <button key={i} className="card blind-card" disabled={state.paused}
+                onClick={() => send('pickBlind', { index: i })} aria-label={`Hidden card ${i + 1}`}>
+                <div className="flip down"><div className="cback" /></div>
+              </button>
             ))}
           </div>
         </div>
@@ -532,30 +743,35 @@ function Table({ state, send, name, onLeave, flash }: {
 
       {state.started && (
         <>
-          <TeamPanel team={myTeam} name={teamName(myTeam)} hands={view?.tricks[myTeam] ?? 0} tens={tensOf(myTeam)}
+          <TeamPanel team={myTeam} name={teamName(myTeam)} hands={handsOf(myTeam)} tens={tensOf(myTeam)}
             mine={you !== null} side="left" celebrate={!!matchDone && view?.result?.winner === myTeam}
-            onRename={(n) => send('setTeamName', { name: n })} />
-          <TeamPanel team={otherTeam} name={teamName(otherTeam)} hands={view?.tricks[otherTeam] ?? 0} tens={tensOf(otherTeam)}
-            mine={false} side="right" celebrate={!!matchDone && view?.result?.winner === otherTeam} onRename={() => {}} />
+            onRename={(n) => send('setTeamName', { name: n })} elRef={(el) => { panelEls.current.left = el; }} />
+          <TeamPanel team={otherTeam} name={teamName(otherTeam)} hands={handsOf(otherTeam)} tens={tensOf(otherTeam)}
+            mine={false} side="right" celebrate={!!matchDone && view?.result?.winner === otherTeam} onRename={() => {}}
+            elRef={(el) => { panelEls.current.right = el; }} />
         </>
       )}
 
       {myTurn && !(sweep && !sweep.flying) && <div className="yourturn">Your turn</div>}
-      {view && choosing && !iChoose && you !== null && <div className="hint">Your cards are revealed once trump is set</div>}
+      {view && choosing && !iChoose && you !== null && showChooseUI && <div className="hint">Your cards are revealed once trump is set</div>}
 
-      {you !== null && hand.length > 0 && (
-        <div className={`hand ${myTurn ? 'live' : ''}`} style={{ ['--n' as any]: hand.length }}>
-          {hand.map((c, i) => (
-            <CardFace key={`${c.r}${c.s}`} card={c} trump={c.s === view?.trump}
-              className={[myTurn && isLegal(c) ? 'up' : '', suitStarts.has(i) ? 'gs' : ''].join(' ')}
-              onClick={myTurn ? () => send('play', { card: c }) : undefined}
-              disabled={myTurn && !isLegal(c)} />
-          ))}
-        </div>
-      )}
-      {you !== null && hand.length === 0 && handCount > 0 && (
-        <div className="hand" style={{ ['--n' as any]: handCount }} aria-label={`${handCount} face-down cards`}>
-          {Array.from({ length: handCount }).map((_, i) => <div key={i} className="card back" />)}
+      {you !== null && (showBacks > 0 || hand.length > 0) && (
+        <div ref={(el) => { handRowEl.current = el; }} className={`hand ${myTurn ? 'live' : ''} ${dealing ? 'busy' : ''}`}
+          style={{ ['--n' as any]: showBacks || hand.length }}>
+          {showBacks > 0
+            ? Array.from({ length: showBacks }).map((_, i) => (
+              <CardFace key={`back-${i}`} card={null} elRef={(el) => { if (el) handEls.current.set(`back-${i}`, el); else handEls.current.delete(`back-${i}`); }} />
+            ))
+            : hand.map((c, i) => {
+              const key = cardKey(c);
+              return (
+                <CardFace key={key} card={c} trump={c.s === view?.trump}
+                  className={[myTurn && isLegal(c) ? 'up' : '', suitStarts.has(i) ? 'gs' : ''].join(' ')}
+                  onClick={myTurn ? () => send('play', { card: c }) : undefined}
+                  disabled={myTurn && !isLegal(c)}
+                  elRef={(el) => { if (el) handEls.current.set(key, el); else handEls.current.delete(key); }} />
+              );
+            })}
         </div>
       )}
 
@@ -604,6 +820,8 @@ function Table({ state, send, name, onLeave, flash }: {
       )}
     </div>
   );
+
+  function seat0Name(seat: number) { return seat === you ? 'You' : seatName(seat); }
 }
 
 // ---------- app ----------
