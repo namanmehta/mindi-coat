@@ -585,27 +585,37 @@ function Table({ state, send, name, onLeave, flash }: {
 
       {pauseText && <div className="pause glass capsule" role="status">{pauseText}</div>}
 
-      <div className="felt" />
+      <div className={`felt ${myTurn && !(sweep && !sweep.flying) ? 'myturn' : ''}`} />
 
       {([0, 1, 2, 3] as Seat[]).map((seat) => {
         const pos = posOf(seat);
-        if (pos === 'bottom' && you !== null) return null;
+        const mine = seat === you;
         const s = seats[seat];
         const turn = view?.phase === 'playing' && view.turn === seat && !state.paused && !dealing;
+        const wonHand = !!sweep && !sweep.flying && sweep.winner === seat;
         const isChooser = state.started && !!view && view.chooser === seat && !tossing;
         const count = view ? view.handCounts[seat] : 0;
         return (
           <div key={seat} ref={(el) => { if (el) seatEls.current.set(seat, el); else seatEls.current.delete(seat); }}
-            className={`seat s-${pos} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
+            className={`seat s-${mine ? 'me' : pos} ${mine && tossing ? 'hush' : ''} t${seat % 2} ${turn ? 'turn' : ''} ${s && !s.connected ? 'away' : ''} ${s ? '' : 'empty'}`}>
             <div className="av" aria-hidden="true">
               {isChooser && <Crown />}
               {s ? (s.bot ? <span className="bot-face"><Robot /></span> : initials(s.name)) : '+'}
             </div>
-            <div className="name">
-              <span className="nm">{seatName(seat)}</span>
-              {s && !s.connected ? <span className="cnt">{s.open ? 'Left' : 'Reconnecting'}</span>
-                : count > 0 && showCounts && <span className="cnt">{plural(count, 'card')}</span>}
-            </div>
+            {mine ? (
+              <div className="name">
+                {wonHand ? <span key="won" className="me-tag won-chip">You win the hand</span>
+                  : turn ? <span key="turn" className="me-tag turn-tag">Your turn</span>
+                    : <span className="nm">{seatName(seat)}</span>}
+              </div>
+            ) : (
+              <div className="name">
+                <span className="nm">{seatName(seat)}</span>
+                {wonHand ? <span className="won-chip">Wins the hand</span>
+                  : s && !s.connected ? <span className="cnt">{s.open ? 'Left' : 'Reconnecting'}</span>
+                    : count > 0 && showCounts && <span className="cnt">{plural(count, 'card')}</span>}
+              </div>
+            )}
             {seatActions(seat).length > 0 && (
               <div className="seat-actions">
                 {seatActions(seat).map((a) => (
@@ -649,9 +659,6 @@ function Table({ state, send, name, onLeave, flash }: {
         {flights.map((f) => <CardFace key={f.id} card={null} className="flight" elRef={flightRef(f.seat, f.m)} />)}
       </div>
 
-      {sweep && !sweep.flying && (
-        <div className="won-tag glass capsule" role="status">{sweep.winner === you ? 'You win' : `${seatName(sweep.winner)} wins`} the hand</div>
-      )}
       {mindi && (
         <div className="mindi" role="status" aria-label={`Mindi! ${mindiTeam} take the ten`}>
           <div className="rays" />
@@ -752,7 +759,6 @@ function Table({ state, send, name, onLeave, flash }: {
         </>
       )}
 
-      {myTurn && !(sweep && !sweep.flying) && <div className="yourturn">Your turn</div>}
       {view && choosing && !iChoose && you !== null && showChooseUI && <div className="hint">Your cards are revealed once trump is set</div>}
 
       {you !== null && (showBacks > 0 || hand.length > 0) && (

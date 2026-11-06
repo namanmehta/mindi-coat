@@ -114,6 +114,9 @@ button:disabled { cursor: default; }
   padding: calc(var(--u) * 1.4) calc(var(--u) * 3.4); font-size: calc(var(--u) * 2.9); font-weight: 600; text-align: center; }
 
 /* the table: content, solid */
+.felt::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 0.35s;
+  box-shadow: inset 0 calc(var(--u) * -3.5) calc(var(--u) * 6) rgba(244, 183, 64, 0.5), 0 calc(var(--u) * 1.6) calc(var(--u) * 5) rgba(244, 183, 64, 0.38); }
+.felt.myturn::after { opacity: 1; }
 .felt { position: absolute; left: 50%; top: var(--cy); transform: translate(-50%, -50%);
   width: calc(var(--u) * 114); height: calc(var(--u) * 47); border-radius: 999px;
   background: radial-gradient(70% 90% at 50% 35%, var(--felt-hi), var(--felt) 55%, var(--felt-low));
@@ -148,6 +151,19 @@ button:disabled { cursor: default; }
 .s-left { left: calc(50% - var(--u) * 62); top: calc(var(--cy) - var(--u) * 8); width: calc(var(--u) * 10); }
 .s-right { left: calc(50% + var(--u) * 52); top: calc(var(--cy) - var(--u) * 8); width: calc(var(--u) * 10); }
 .s-left, .s-right { justify-items: center; }
+/* your own seat: on the rim nearest you, label to the right of the avatar */
+.s-me { left: 50%; top: calc(var(--cy) + var(--u) * 18.5); transform: translateX(-50%); width: calc(var(--u) * 10); z-index: 8; }
+.s-me .name { position: absolute; left: calc(100% + var(--u) * 1.6); top: 50%; transform: translateY(-50%); justify-items: start; white-space: nowrap; }
+.me-tag { display: inline-grid; place-items: center; height: calc(var(--u) * 6.2); padding: 0 calc(var(--u) * 2.8); border-radius: 999px;
+  font-weight: 700; font-size: calc(var(--u) * 2.9); white-space: nowrap; }
+.turn-tag { background: var(--gold); color: #1a1405; box-shadow: 0 calc(var(--u) * 1) calc(var(--u) * 3) rgba(244, 183, 64, 0.45);
+  animation: turn-pop 0.7s var(--spring) both; }
+.won-chip { display: inline-block; margin-top: calc(var(--u) * 0.6); padding: calc(var(--u) * 0.3) calc(var(--u) * 1.8); border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92); color: var(--ink); font-weight: 700; font-size: calc(var(--u) * 2.3); white-space: nowrap; animation: rise 0.35s var(--spring); }
+.me-tag.won-chip { margin: 0; height: calc(var(--u) * 6.2); padding: 0 calc(var(--u) * 2.8); font-size: calc(var(--u) * 2.9); display: inline-grid; }
+.s-me.hush { opacity: 0; }
+.s-me { transition: opacity 0.3s; }
+.s-me.turn .av::after { box-shadow: 0 0 0 calc(var(--u) * 0.55) var(--gold), 0 0 calc(var(--u) * 5) rgba(244, 183, 64, 0.85), 0 0 calc(var(--u) * 10) rgba(244, 183, 64, 0.5); }
 .s-left .name, .s-right .name { width: calc(var(--u) * 26); }
 
 /* cards: everything scales from the card's own width (--cw) */
@@ -314,6 +330,7 @@ button:disabled { cursor: default; }
 .hand .card.gs { margin-left: calc(var(--ov) + var(--u) * 1.4); }
 .hand.busy { pointer-events: none; }
 .hand.live .card.up { transform: translateY(calc(var(--u) * -2)); }
+.hand.live .card.up .face { box-shadow: 0 0 0 calc(var(--cw) * 0.025) var(--gold), 0 calc(var(--cw) * 0.06) calc(var(--cw) * 0.22) rgba(244, 183, 64, 0.35); }
 .hand.live .card.up:hover { transform: translateY(calc(var(--u) * -3.4)); }
 .hand .card.up:active { transform: translateY(calc(var(--u) * -1.2)) scale(0.97); }
 .yourturn { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--u) * 28 + var(--safe-b)); z-index: 9;
@@ -372,6 +389,7 @@ td.a, td.b { font-weight: 600; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes up { from { transform: translateY(40%); } }
 @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+@keyframes turn-pop { 0% { transform: scale(0.6); opacity: 0; } 45% { transform: scale(1.12); opacity: 1; } 70% { transform: scale(0.97); } 100% { transform: scale(1); } }
 @keyframes toss-in { from { transform: translate(calc(var(--x) * -1), calc(var(--y) * -1)); opacity: 0; } 1% { opacity: 1; } }
 @keyframes toss-flip { from { transform: rotateY(180deg); } to { transform: rotateY(0deg); } }
 @keyframes toss-glow { to { box-shadow: 0 0 0 calc(var(--cw) * 0.05) #fff, 0 0 calc(var(--cw) * 0.5) rgba(255, 255, 255, 0.9); } }
